@@ -1,61 +1,63 @@
 """Tests for button platform."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
+from homeassistant.core import HomeAssistant
 from custom_components.occupancy_tracker.button import (
     ResetAnomaliesButton,
     async_setup_platform,
 )
-from custom_components.occupancy_tracker.occupancy_tracker import OccupancyTracker
+from custom_components.occupancy_tracker.coordinator import OccupancyCoordinator
 
 
 @pytest.fixture
-def tracker():
-    """Create a test occupancy tracker."""
+def coordinator():
+    """Create a test occupancy coordinator."""
+    hass = Mock(spec=HomeAssistant)
     config = {
         "areas": {"living_room": {}},
         "adjacency": {},
         "sensors": {},
     }
-    return OccupancyTracker(config)
+    return OccupancyCoordinator(hass, config)
 
 
 class TestResetAnomaliesButton:
     """Test ResetAnomaliesButton class."""
 
-    def test_create_button(self, tracker):
+    def test_create_button(self, coordinator):
         """Test creating a reset anomalies button."""
-        button = ResetAnomaliesButton(tracker)
+        button = ResetAnomaliesButton(coordinator)
 
         assert button._attr_name == "Reset Anomalies"
         assert button._attr_unique_id == "reset_anomalies_button"
 
-    async def test_button_press(self, tracker):
+    async def test_button_press(self, coordinator):
         """Test pressing the button resets anomalies."""
         # Create some warnings
-        tracker.anomaly_detector._create_warning("test1", "Test warning 1")
-        tracker.anomaly_detector._create_warning("test2", "Test warning 2")
+        coordinator.anomaly_detector._create_warning("test1", "Test warning 1")
+        coordinator.anomaly_detector._create_warning("test2", "Test warning 2")
 
         # Set up occupancy
-        tracker.areas["living_room"].occupancy = 2
+        coordinator.area_manager.areas["living_room"].occupancy = 2
 
-        assert len(tracker.get_warnings()) == 2
+        assert len(coordinator.get_warnings()) == 2
 
-        button = ResetAnomaliesButton(tracker)
+        button = ResetAnomaliesButton(coordinator)
 
         # Press button
         await button.async_press()
 
         # Warnings should be cleared
-        assert len(tracker.get_warnings()) == 0
+        assert len(coordinator.get_warnings()) == 0
 
         # Occupancy should be preserved
-        assert tracker.areas["living_room"].occupancy == 2
+        assert coordinator.area_manager.areas["living_room"].occupancy == 2
 
-    async def test_button_press_multiple_times(self, tracker):
+    async def test_button_press_multiple_times(self, coordinator):
         """Test pressing button multiple times doesn't cause errors."""
-        button = ResetAnomaliesButton(tracker)
+        button = ResetAnomaliesButton(coordinator)
 
         # Press multiple times
         await button.async_press()
@@ -72,15 +74,15 @@ class TestAsyncSetupPlatform:
         """Test setting up the button platform."""
         from custom_components.occupancy_tracker.const import DOMAIN
 
-        # Create tracker and add to hass.data
+        # Create coordinator and add to hass.data
         config = {
             "areas": {"room1": {}},
             "adjacency": {},
             "sensors": {},
         }
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        hass.data[DOMAIN] = {"occupancy_tracker": tracker}
+        hass.data[DOMAIN] = {"coordinator": coordinator}
 
         # Mock async_add_entities
         async_add_entities = MagicMock()
@@ -104,9 +106,9 @@ class TestAsyncSetupPlatform:
             "adjacency": {},
             "sensors": {},
         }
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        hass.data[DOMAIN] = {"occupancy_tracker": tracker}
+        hass.data[DOMAIN] = {"coordinator": coordinator}
 
         async_add_entities = MagicMock()
 

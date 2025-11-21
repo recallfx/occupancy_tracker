@@ -1,15 +1,18 @@
-"""Tests for OccupancyTracker core functionality."""
+"""Tests for OccupancyCoordinator core functionality."""
 
 import time
+from unittest.mock import Mock
 
-from custom_components.occupancy_tracker.occupancy_tracker import OccupancyTracker
+from homeassistant.core import HomeAssistant
+from custom_components.occupancy_tracker.coordinator import OccupancyCoordinator
 
 
-class TestOccupancyTrackerInit:
-    """Test OccupancyTracker initialization."""
+class TestOccupancyCoordinatorInit:
+    """Test OccupancyCoordinator initialization."""
 
-    def test_create_tracker(self):
-        """Test creating an occupancy tracker."""
+    def test_create_coordinator(self):
+        """Test creating an occupancy coordinator."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "living_room": {"name": "Living Room", "indoors": True},
@@ -21,16 +24,17 @@ class TestOccupancyTrackerInit:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        assert tracker.config == config
-        assert len(tracker.areas) == 2
-        assert len(tracker.sensors) == 1
-        assert "living_room" in tracker.areas
-        assert "sensor.motion_living" in tracker.sensors
+        assert coordinator.config == config
+        assert len(coordinator.area_manager.areas) == 2
+        assert len(coordinator.sensor_manager.sensors) == 1
+        assert "living_room" in coordinator.area_manager.areas
+        assert "sensor.motion_living" in coordinator.sensor_manager.sensors
 
     def test_initialize_areas(self):
         """Test area initialization from config."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "bedroom": {"name": "Bedroom", "indoors": True, "exit_capable": False},
@@ -40,15 +44,16 @@ class TestOccupancyTrackerInit:
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        assert tracker.areas["bedroom"].is_indoors is True
-        assert tracker.areas["bedroom"].is_exit_capable is False
-        assert tracker.areas["porch"].is_indoors is False
-        assert tracker.areas["porch"].is_exit_capable is True
+        assert coordinator.area_manager.areas["bedroom"].is_indoors is True
+        assert coordinator.area_manager.areas["bedroom"].is_exit_capable is False
+        assert coordinator.area_manager.areas["porch"].is_indoors is False
+        assert coordinator.area_manager.areas["porch"].is_exit_capable is True
 
     def test_initialize_sensors(self):
         """Test sensor initialization from config."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room1": {}},
             "adjacency": {},
@@ -61,13 +66,14 @@ class TestOccupancyTrackerInit:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        assert tracker.sensors["sensor.motion_1"].config["type"] == "motion"
-        assert tracker.sensors["sensor.door_1"].config["type"] == "magnetic"
+        assert coordinator.sensor_manager.sensors["sensor.motion_1"].config["type"] == "motion"
+        assert coordinator.sensor_manager.sensors["sensor.door_1"].config["type"] == "magnetic"
 
     def test_initialize_adjacency(self):
         """Test adjacency initialization."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "living_room": {},
@@ -85,19 +91,20 @@ class TestOccupancyTrackerInit:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Living room sensor should know about kitchen and hallway sensors
-        adjacent = tracker.adjacency_tracker.get_adjacency("sensor.motion_living")
+        adjacent = coordinator.adjacency_tracker.get_adjacency("sensor.motion_living")
         assert "sensor.motion_kitchen" in adjacent
         assert "sensor.motion_hallway" in adjacent
 
 
-class TestOccupancyTrackerSensorEvents:
+class TestOccupancyCoordinatorSensorEvents:
     """Test sensor event processing."""
 
     def test_process_motion_event(self):
         """Test processing a motion sensor event."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"living_room": {"name": "Living Room", "exit_capable": True}},
             "adjacency": {},
@@ -106,18 +113,19 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.process_sensor_event("sensor.motion_living", True, timestamp)
+        coordinator.process_sensor_event("sensor.motion_living", True, timestamp)
 
         # Motion should be recorded
-        assert tracker.areas["living_room"].last_motion == timestamp
+        assert coordinator.area_manager.areas["living_room"].last_motion == timestamp
         # Entry should be recorded (from outside via exit_capable)
-        assert tracker.areas["living_room"].occupancy == 1
+        assert coordinator.area_manager.areas["living_room"].occupancy == 1
 
     def test_process_motion_event_occupied_room(self):
         """Test motion in already occupied room."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"kitchen": {}},
             "adjacency": {},
@@ -126,30 +134,32 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
         # First motion
-        tracker.process_sensor_event("sensor.motion_kitchen", True, timestamp)
-        occupancy_after_first = tracker.areas["kitchen"].occupancy
+        coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp)
+        occupancy_after_first = coordinator.area_manager.areas["kitchen"].occupancy
 
         # Second motion (repeated)
-        tracker.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
+        coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
 
         # Occupancy shouldn't increase again
-        assert tracker.areas["kitchen"].occupancy == occupancy_after_first
+        assert coordinator.area_manager.areas["kitchen"].occupancy == occupancy_after_first
 
     def test_process_unknown_sensor(self):
         """Test processing event from unknown sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Should not raise error
-        tracker.process_sensor_event("sensor.unknown", True, time.time())
+        coordinator.process_sensor_event("sensor.unknown", True, time.time())
 
     def test_process_magnetic_sensor(self):
         """Test processing magnetic (door/window) sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room1": {}, "room2": {}},
             "adjacency": {"room1": ["room2"]},
@@ -161,16 +171,17 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Process door open/close
-        tracker.process_sensor_event("sensor.door_12", True, time.time())
-        tracker.process_sensor_event("sensor.door_12", False, time.time() + 5)
+        coordinator.process_sensor_event("sensor.door_12", True, time.time())
+        coordinator.process_sensor_event("sensor.door_12", False, time.time() + 5)
 
         # Door events are recorded but don't directly change occupancy
 
     def test_process_camera_motion_sensor(self):
         """Test processing camera motion sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"front_porch": {"exit_capable": True}},
             "adjacency": {},
@@ -182,15 +193,16 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.process_sensor_event("sensor.camera_motion", True, timestamp)
+        coordinator.process_sensor_event("sensor.camera_motion", True, timestamp)
 
-        assert tracker.areas["front_porch"].last_motion == timestamp
+        assert coordinator.area_manager.areas["front_porch"].last_motion == timestamp
 
     def test_process_camera_person_sensor(self):
         """Test processing camera person detection sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"driveway": {"exit_capable": True}},
             "adjacency": {},
@@ -199,15 +211,16 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.process_sensor_event("sensor.camera_person", True, timestamp)
+        coordinator.process_sensor_event("sensor.camera_person", True, timestamp)
 
-        assert tracker.areas["driveway"].last_motion == timestamp
+        assert coordinator.area_manager.areas["driveway"].last_motion == timestamp
 
     def test_sensor_state_change_tracking(self):
         """Test that sensor state changes are properly tracked."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room": {}},
             "adjacency": {},
@@ -216,21 +229,22 @@ class TestOccupancyTrackerSensorEvents:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         t1 = time.time()
 
-        tracker.process_sensor_event("sensor.motion", True, t1)
-        assert tracker.sensors["sensor.motion"].current_state is True
+        coordinator.process_sensor_event("sensor.motion", True, t1)
+        assert coordinator.sensor_manager.sensors["sensor.motion"].current_state is True
 
-        tracker.process_sensor_event("sensor.motion", False, t1 + 10)
-        assert tracker.sensors["sensor.motion"].current_state is False
+        coordinator.process_sensor_event("sensor.motion", False, t1 + 10)
+        assert coordinator.sensor_manager.sensors["sensor.motion"].current_state is False
 
 
-class TestOccupancyTrackerTransitions:
+class TestOccupancyCoordinatorTransitions:
     """Test occupancy transitions between areas."""
 
     def test_transition_between_adjacent_rooms(self):
         """Test person transitioning between adjacent rooms."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "living_room": {},
@@ -243,24 +257,25 @@ class TestOccupancyTrackerTransitions:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
         # Start in living room (entry from outside - both are not exit_capable)
         # This will create an unexpected motion warning but still increment
-        tracker.process_sensor_event("sensor.motion_living", True, timestamp)
-        assert tracker.areas["living_room"].occupancy >= 1
+        coordinator.process_sensor_event("sensor.motion_living", True, timestamp)
+        assert coordinator.area_manager.areas["living_room"].occupancy >= 1
 
         # Move to kitchen (adjacent, recent motion in living room)
-        tracker.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
+        coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
 
         # Kitchen should have person
-        assert tracker.areas["kitchen"].occupancy >= 1
+        assert coordinator.area_manager.areas["kitchen"].occupancy >= 1
         # Living room should have decremented if transition detected
         # (This depends on the exact logic in handle_unexpected_motion)
 
     def test_entry_from_outside(self):
         """Test person entering from outside through exit-capable area."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "front_door": {"exit_capable": True},
@@ -271,107 +286,114 @@ class TestOccupancyTrackerTransitions:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        tracker.process_sensor_event("sensor.motion_door", True, time.time())
+        coordinator.process_sensor_event("sensor.motion_door", True, time.time())
 
         # Should register entry
-        assert tracker.areas["front_door"].occupancy == 1
+        assert coordinator.area_manager.areas["front_door"].occupancy == 1
 
 
-class TestOccupancyTrackerQueries:
+class TestOccupancyCoordinatorQueries:
     """Test occupancy query methods."""
 
     def test_get_occupancy(self):
         """Test getting occupancy count for an area."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"bedroom": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Initially zero
-        assert tracker.get_occupancy("bedroom") == 0
+        assert coordinator.get_occupancy("bedroom") == 0
 
         # Manually set occupancy
-        tracker.areas["bedroom"].occupancy = 2
+        coordinator.area_manager.areas["bedroom"].occupancy = 2
 
-        assert tracker.get_occupancy("bedroom") == 2
+        assert coordinator.get_occupancy("bedroom") == 2
 
     def test_get_occupancy_unknown_area(self):
         """Test getting occupancy for unknown area."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        assert tracker.get_occupancy("unknown") == 0
+        assert coordinator.get_occupancy("unknown") == 0
 
     def test_get_occupancy_probability_occupied(self):
         """Test probability calculation for occupied area with recent motion."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"office": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.areas["office"].occupancy = 1
-        tracker.areas["office"].record_motion(timestamp)
+        coordinator.area_manager.areas["office"].occupancy = 1
+        coordinator.area_manager.areas["office"].record_motion(timestamp)
 
-        probability = tracker.get_occupancy_probability("office")
+        probability = coordinator.get_occupancy_probability("office")
 
         # Recent motion + occupied = high probability
         assert probability == 0.95
 
     def test_get_occupancy_probability_occupied_no_recent_motion(self):
         """Test probability for occupied area without recent motion."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"garage": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.areas["garage"].occupancy = 1
-        tracker.areas["garage"].last_motion = timestamp - 600  # 10 minutes ago
+        coordinator.area_manager.areas["garage"].occupancy = 1
+        coordinator.area_manager.areas["garage"].last_motion = timestamp - 600  # 10 minutes ago
 
-        probability = tracker.get_occupancy_probability("garage")
+        probability = coordinator.get_occupancy_probability("garage")
 
         # Occupied but no recent motion = medium probability
         assert probability == 0.75
 
     def test_get_occupancy_probability_unoccupied(self):
         """Test probability for unoccupied area."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"basement": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        probability = tracker.get_occupancy_probability("basement")
+        probability = coordinator.get_occupancy_probability("basement")
 
         assert probability == 0.05
 
     def test_get_occupancy_probability_unknown_area(self):
         """Test probability for unknown area."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        probability = tracker.get_occupancy_probability("unknown")
+        probability = coordinator.get_occupancy_probability("unknown")
 
         assert probability == 0.05
 
     def test_get_area_status(self):
         """Test getting detailed area status."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "living_room": {"name": "Living Room"},
@@ -380,13 +402,13 @@ class TestOccupancyTrackerQueries:
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        tracker.areas["living_room"].occupancy = 2
-        tracker.areas["living_room"].record_motion(timestamp)
+        coordinator.area_manager.areas["living_room"].occupancy = 2
+        coordinator.area_manager.areas["living_room"].record_motion(timestamp)
 
-        status = tracker.get_area_status("living_room")
+        status = coordinator.get_area_status("living_room")
 
         assert status["id"] == "living_room"
         assert status["name"] == "Living Room"
@@ -396,16 +418,18 @@ class TestOccupancyTrackerQueries:
 
     def test_get_area_status_unknown(self):
         """Test getting status for unknown area."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        status = tracker.get_area_status("unknown")
+        status = coordinator.get_area_status("unknown")
 
         assert "error" in status
 
     def test_get_system_status(self):
         """Test getting overall system status."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {
                 "room1": {},
@@ -416,12 +440,12 @@ class TestOccupancyTrackerQueries:
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        tracker.areas["room1"].occupancy = 2
-        tracker.areas["room2"].occupancy = 1
+        coordinator.area_manager.areas["room1"].occupancy = 2
+        coordinator.area_manager.areas["room2"].occupancy = 1
 
-        status = tracker.get_system_status()
+        status = coordinator.get_system_status()
 
         assert status["total_occupancy"] == 3
         assert len(status["occupied_areas"]) == 2
@@ -429,38 +453,41 @@ class TestOccupancyTrackerQueries:
         assert status["occupied_areas"]["room2"] == 1
 
 
-class TestOccupancyTrackerWarnings:
+class TestOccupancyCoordinatorWarnings:
     """Test warning management."""
 
     def test_get_warnings(self):
-        """Test getting warnings from tracker."""
+        """Test getting warnings from coordinator."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Initially no warnings
-        assert len(tracker.get_warnings()) == 0
+        assert len(coordinator.get_warnings()) == 0
 
     def test_resolve_warning(self):
         """Test resolving a warning."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Create a warning
-        warning = tracker.anomaly_detector._create_warning("test", "Test warning")
+        warning = coordinator.anomaly_detector._create_warning("test", "Test warning")
 
-        result = tracker.resolve_warning(warning.id)
+        result = coordinator.resolve_warning(warning.id)
 
         assert result is True
         assert warning.is_active is False
 
 
-class TestOccupancyTrackerReset:
+class TestOccupancyCoordinatorReset:
     """Test reset functionality."""
 
     def test_reset(self):
         """Test full system reset."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room1": {}, "room2": {}},
             "adjacency": {"room1": ["room2"]},
@@ -469,74 +496,77 @@ class TestOccupancyTrackerReset:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
         # Set up some state
-        tracker.areas["room1"].occupancy = 2
-        tracker.areas["room1"].record_motion(timestamp)
-        tracker.process_sensor_event("sensor.motion_1", True, timestamp)
+        coordinator.area_manager.areas["room1"].occupancy = 2
+        coordinator.area_manager.areas["room1"].record_motion(timestamp)
+        coordinator.process_sensor_event("sensor.motion_1", True, timestamp)
 
         # Reset
-        tracker.reset()
+        coordinator.reset()
 
         # Everything should be cleared
-        assert tracker.areas["room1"].occupancy == 0
-        assert tracker.areas["room1"].last_motion == 0
-        assert tracker.sensors["sensor.motion_1"].current_state is False
-        assert len(tracker.get_warnings()) == 0
+        assert coordinator.area_manager.areas["room1"].occupancy == 0
+        assert coordinator.area_manager.areas["room1"].last_motion == 0
+        assert coordinator.sensor_manager.sensors["sensor.motion_1"].current_state is False
+        assert len(coordinator.get_warnings()) == 0
 
     def test_reset_anomalies(self):
         """Test resetting only anomalies (not occupancy state)."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room1": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
         # Set up state and warnings
-        tracker.areas["room1"].occupancy = 1
-        tracker.anomaly_detector._create_warning("test", "Test")
+        coordinator.area_manager.areas["room1"].occupancy = 1
+        coordinator.anomaly_detector._create_warning("test", "Test")
 
         # Reset anomalies only
-        tracker.reset_anomalies()
+        coordinator.reset_anomalies()
 
         # Occupancy preserved, warnings cleared
-        assert tracker.areas["room1"].occupancy == 1
-        assert len(tracker.get_warnings()) == 0
+        assert coordinator.area_manager.areas["room1"].occupancy == 1
+        assert len(coordinator.get_warnings()) == 0
 
 
-class TestOccupancyTrackerTimeouts:
+class TestOccupancyCoordinatorTimeouts:
     """Test timeout checking."""
 
     def test_check_timeouts(self):
         """Test checking for timeout conditions."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"bedroom": {}},
             "adjacency": {},
             "sensors": {},
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
         # Set up occupied area with old motion
-        tracker.areas["bedroom"].occupancy = 1
-        tracker.areas["bedroom"].last_motion = timestamp - (25 * 3600)
+        coordinator.area_manager.areas["bedroom"].occupancy = 1
+        coordinator.area_manager.areas["bedroom"].last_motion = timestamp - (25 * 3600)
 
-        tracker.check_timeouts(timestamp)
+        coordinator.check_timeouts(timestamp)
 
         # Should reset due to inactivity
-        assert tracker.areas["bedroom"].occupancy == 0
+        assert coordinator.area_manager.areas["bedroom"].occupancy == 0
 
 
-class TestOccupancyTrackerDiagnostics:
+class TestOccupancyCoordinatorDiagnostics:
     """Test diagnostic methods."""
 
     def test_diagnose_motion_issues_single_sensor(self):
         """Test diagnosing issues with a specific sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"living_room": {}},
             "adjacency": {},
@@ -545,9 +575,9 @@ class TestOccupancyTrackerDiagnostics:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        result = tracker.diagnose_motion_issues("sensor.motion_living")
+        result = coordinator.diagnose_motion_issues("sensor.motion_living")
 
         assert "sensor.motion_living" in result
         assert result["sensor.motion_living"]["is_motion_sensor"] is True
@@ -556,6 +586,7 @@ class TestOccupancyTrackerDiagnostics:
 
     def test_diagnose_motion_issues_all_sensors(self):
         """Test diagnosing all sensors."""
+        hass = Mock(spec=HomeAssistant)
         config = {
             "areas": {"room1": {}, "room2": {}},
             "adjacency": {},
@@ -565,9 +596,9 @@ class TestOccupancyTrackerDiagnostics:
             },
         }
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        result = tracker.diagnose_motion_issues()
+        result = coordinator.diagnose_motion_issues()
 
         assert len(result) == 2
         assert "sensor.motion_1" in result
@@ -575,11 +606,12 @@ class TestOccupancyTrackerDiagnostics:
 
     def test_diagnose_motion_issues_unknown_sensor(self):
         """Test diagnosing unknown sensor."""
+        hass = Mock(spec=HomeAssistant)
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
 
-        tracker = OccupancyTracker(config)
+        coordinator = OccupancyCoordinator(hass, config)
 
-        result = tracker.diagnose_motion_issues("sensor.unknown")
+        result = coordinator.diagnose_motion_issues("sensor.unknown")
 
         assert "sensor.unknown" in result
         assert "error" in result["sensor.unknown"]

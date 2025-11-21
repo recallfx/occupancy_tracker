@@ -1,7 +1,7 @@
 """Tests for integration setup and initialization."""
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, call
 import time
 
 from homeassistant.core import HomeAssistant, Event, State
@@ -45,20 +45,20 @@ class TestAsyncSetup:
 
         assert result is True
         assert DOMAIN in hass.data
-        assert "occupancy_tracker" in hass.data[DOMAIN]
+        assert "coordinator" in hass.data[DOMAIN]
 
-    async def test_setup_creates_occupancy_tracker(
+    async def test_setup_creates_occupancy_coordinator(
         self, hass: HomeAssistant, sample_config
     ):
-        """Test that setup creates the occupancy tracker."""
+        """Test that setup creates the occupancy coordinator."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
-        assert len(tracker.areas) == 2
-        assert len(tracker.sensors) == 2
-        assert "living_room" in tracker.areas
-        assert "kitchen" in tracker.areas
+        assert len(coordinator.area_manager.areas) == 2
+        assert len(coordinator.sensor_manager.sensors) == 2
+        assert "living_room" in coordinator.area_manager.areas
+        assert "kitchen" in coordinator.area_manager.areas
 
     async def test_setup_no_configuration(self, hass: HomeAssistant):
         """Test setup with no configuration."""
@@ -72,19 +72,19 @@ class TestAsyncSetup:
         """Test that configuration is properly initialized."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Check areas
-        assert tracker.config["areas"]["living_room"]["name"] == "Living Room"
+        assert coordinator.config["areas"]["living_room"]["name"] == "Living Room"
 
         # Check sensors
         assert (
-            tracker.config["sensors"]["binary_sensor.motion_living"]["area"]
+            coordinator.config["sensors"]["binary_sensor.motion_living"]["area"]
             == "living_room"
         )
 
         # Check adjacency
-        assert "kitchen" in tracker.config["adjacency"]["living_room"]
+        assert "kitchen" in coordinator.config["adjacency"]["living_room"]
 
     @patch("custom_components.occupancy_tracker.async_load_platform")
     async def test_setup_loads_platforms(
@@ -112,7 +112,7 @@ class TestStateChangeListener:
         """Test state change listener processes ON state."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Create a state change event
         new_state = State("binary_sensor.motion_living", STATE_ON)
@@ -125,13 +125,13 @@ class TestStateChangeListener:
 
         # Manually trigger the listener
         # (In real HA, this would be triggered by async_track_state_change_event)
-        timestamp_before = tracker.last_event_time
+        timestamp_before = coordinator.last_event_time
 
         # Simulate processing the event
-        tracker.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
 
         # Event should have been processed
-        assert tracker.last_event_time > timestamp_before
+        assert coordinator.last_event_time > timestamp_before
 
     async def test_state_change_listener_off_state(
         self, hass: HomeAssistant, sample_config
@@ -139,16 +139,16 @@ class TestStateChangeListener:
         """Test state change listener processes OFF state."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Set sensor to ON first
-        tracker.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
 
         # Then to OFF
-        tracker.process_sensor_event("binary_sensor.motion_living", False, time.time())
+        coordinator.process_sensor_event("binary_sensor.motion_living", False, time.time())
 
         # Sensor state should be False
-        assert tracker.sensors["binary_sensor.motion_living"].current_state is False
+        assert coordinator.sensor_manager.sensors["binary_sensor.motion_living"].current_state is False
 
     async def test_state_change_listener_unknown_sensor(
         self, hass: HomeAssistant, sample_config
@@ -156,10 +156,10 @@ class TestStateChangeListener:
         """Test state change listener handles unknown sensor gracefully."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Process event from unknown sensor (should not raise error)
-        tracker.process_sensor_event("binary_sensor.unknown", True, time.time())
+        coordinator.process_sensor_event("binary_sensor.unknown", True, time.time())
 
 
 class TestIntegrationConfiguration:
@@ -178,8 +178,8 @@ class TestIntegrationConfiguration:
         result = await async_setup(hass, config)
 
         assert result is True
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
-        assert len(tracker.areas) == 1
+        coordinator = hass.data[DOMAIN]["coordinator"]
+        assert len(coordinator.area_manager.areas) == 1
 
     async def test_configuration_with_multiple_sensor_types(self, hass: HomeAssistant):
         """Test configuration with different sensor types."""
@@ -208,8 +208,8 @@ class TestIntegrationConfiguration:
         result = await async_setup(hass, config)
 
         assert result is True
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
-        assert len(tracker.sensors) == 3
+        coordinator = hass.data[DOMAIN]["coordinator"]
+        assert len(coordinator.sensor_manager.sensors) == 3
 
     async def test_configuration_with_outdoor_areas(self, hass: HomeAssistant):
         """Test configuration with indoor and outdoor areas."""
@@ -227,10 +227,10 @@ class TestIntegrationConfiguration:
         result = await async_setup(hass, config)
 
         assert result is True
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
-        assert tracker.areas["living_room"].is_indoors is True
-        assert tracker.areas["porch"].is_indoors is False
-        assert tracker.areas["porch"].is_exit_capable is True
+        coordinator = hass.data[DOMAIN]["coordinator"]
+        assert coordinator.area_manager.areas["living_room"].is_indoors is True
+        assert coordinator.area_manager.areas["porch"].is_indoors is False
+        assert coordinator.area_manager.areas["porch"].is_exit_capable is True
 
     async def test_configuration_with_complex_adjacency(self, hass: HomeAssistant):
         """Test configuration with complex adjacency graph."""
@@ -255,11 +255,11 @@ class TestIntegrationConfiguration:
         result = await async_setup(hass, config)
 
         assert result is True
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Check adjacency is properly set up
-        assert "kitchen" in tracker.config["adjacency"]["living_room"]
-        assert "bedroom" in tracker.config["adjacency"]["hallway"]
+        assert "kitchen" in coordinator.config["adjacency"]["living_room"]
+        assert "bedroom" in coordinator.config["adjacency"]["hallway"]
 
 
 class TestIntegrationDataFlow:
@@ -271,31 +271,31 @@ class TestIntegrationDataFlow:
         """Test that sensor events update area state correctly."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Process motion event
         timestamp = time.time()
-        tracker.process_sensor_event("binary_sensor.motion_living", True, timestamp)
+        coordinator.process_sensor_event("binary_sensor.motion_living", True, timestamp)
 
         # Area should have motion recorded
-        assert tracker.areas["living_room"].last_motion == timestamp
+        assert coordinator.area_manager.areas["living_room"].last_motion == timestamp
 
     async def test_multiple_sensor_events(self, hass: HomeAssistant, sample_config):
         """Test processing multiple sensor events."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Process events from both sensors
         t1 = time.time()
-        tracker.process_sensor_event("binary_sensor.motion_living", True, t1)
+        coordinator.process_sensor_event("binary_sensor.motion_living", True, t1)
 
         t2 = t1 + 10
-        tracker.process_sensor_event("binary_sensor.motion_kitchen", True, t2)
+        coordinator.process_sensor_event("binary_sensor.motion_kitchen", True, t2)
 
         # Both areas should have motion
-        assert tracker.areas["living_room"].last_motion == t1
-        assert tracker.areas["kitchen"].last_motion == t2
+        assert coordinator.area_manager.areas["living_room"].last_motion == t1
+        assert coordinator.area_manager.areas["kitchen"].last_motion == t2
 
     async def test_occupancy_tracking_through_integration(
         self, hass: HomeAssistant, sample_config
@@ -303,10 +303,10 @@ class TestIntegrationDataFlow:
         """Test end-to-end occupancy tracking."""
         await async_setup(hass, sample_config)
 
-        tracker = hass.data[DOMAIN]["occupancy_tracker"]
+        coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Simulate person entering (living room is not exit_capable, will create warning)
-        tracker.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
 
         # Should have occupancy (even if unexpected)
-        assert tracker.get_occupancy("living_room") >= 1
+        assert coordinator.get_occupancy("living_room") >= 1
