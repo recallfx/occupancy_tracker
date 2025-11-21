@@ -2,67 +2,50 @@
 
 ## Architecture overview
 
-This Home Assistant integration uses a modular coordinator pattern with five independent components. The coordinator (`motion_coordinator.py`) wires components together but delegates all logic to specialized modules:
+This Home Assistant integration tracks occupancy across areas using a coordinator-based architecture. The core components are:
 
-- `state_machine.py` - manages transitions between 7 states (IDLE, MOTION_AUTO, AUTO, MANUAL, MOTION_MANUAL, MANUAL_OFF, OVERRIDDEN)
-- `timer_manager.py` - handles motion timers (short) and extended timers (long) with lifecycle management
-- `light_controller.py` - controls lights using pluggable brightness and selection strategies
-- `triggers.py` - event handlers for motion sensors and override switches, extensible via TriggerHandler base class
-- `manual_detection.py` - detects when users manually adjust lights using configurable strategies
+- `OccupancyCoordinator` (`coordinator.py`): The central hub that manages the system state, coordinates updates, and interfaces with Home Assistant. It uses `DataUpdateCoordinator` but triggers updates manually via `async_set_updated_data` when events occur.
+- `AreaManager` (`area_manager.py`): Manages the state of individual areas (occupancy count, last motion, etc.).
+- `SensorManager` (`sensor_manager.py`): Handles sensor state changes, maintains sensor history, and updates the `AreaManager`.
+- `SensorAdjacencyTracker` (`helpers/sensor_adjacency_tracker.py`): Tracks transitions between sensors to infer movement between areas.
+- `AnomalyDetector` (`helpers/anomaly_detector.py`): Monitors for anomalies like sensors getting stuck or inconsistent states.
 
-The coordinator initializes modules in `__init__`, wires callbacks in `async_setup_listeners()`, and delegates state transitions to the state machine. Components communicate through callbacks, not direct method calls.
+The system is initialized in `__init__.py` via `async_setup`, which reads the YAML configuration and creates the `OccupancyCoordinator`.
 
 ## Critical patterns
 
-**Motion activation disabled behavior**: When `motion_activation=False`, the MotionTrigger still fires callbacks (lines 141-169 in `triggers.py`). The coordinator handles this in `_handle_motion_on()` by resetting the extended timer without transitioning states. This prevents lights from turning off after 20 minutes when a room is actively used but motion shouldn't auto-enable lights.
+**Sensor Event Processing**:
+Sensor state changes are caught in `__init__.py` by `state_change_listener` and passed to `coordinator.process_sensor_event(sensor_id, state, timestamp)`. The coordinator then delegates to `SensorManager`.
 
-**State machine transitions**: Use `StateTransitionEvent` enum values, not raw strings. The state machine validates transitions and prevents invalid ones. Always check `state_machine.py` lines 40-80 for the transition table before adding new transitions.
+**State Updates**:
+Unlike a polling coordinator, this system is event-driven. `async_set_updated_data` is called explicitly in `process_sensor_event` and `check_timeouts` to notify listeners (sensors, buttons, etc.) of state changes.
 
-**Timer management**: The TimerManager uses `TimerType` enum (MOTION, EXTENDED, CUSTOM). Access timers by name string, not type. Use `has_active_timer(name)` not `is_timer_active()`. Timer start times are private (`_start_time`) - use `end_time` property or `remaining_seconds` instead.
+**Anomaly Detection**:
+The `AnomalyDetector` runs checks to identify issues. `check_timeouts` should be called periodically (or on events) to update time-dependent anomalies.
 
-**Light context tracking**: The LightController tracks which context IDs originated from the integration using `is_integration_context()`. This distinguishes automation-triggered changes from manual interventions. Context cleanup happens every hour via `_schedule_periodic_cleanup()`.
+**Configuration**:
+Configuration is strictly YAML-based (`config.yaml` style). There is no Config Flow (`config_flow.py`). The schema is defined in `__init__.py` using `voluptuous`.
+- `areas`: Definitions of areas.
+- `sensors`: Mapping of HA entities to areas and types.
+- `adjacency`: Defining connections between areas.
 
 ## Testing commands
 
-Run tests with `uv run pytest tests/` (not `pytest` directly - uv manages the environment). Tests use pytest-homeassistant-custom-component which provides fixtures like `hass` and `MockConfigEntry`.
-
-For new test files, use `ConfigEntry` from `homeassistant.config_entries`, not a custom mock. Required parameters: version, minor_version, domain, title, data, options, entry_id, source, unique_id, discovery_keys.
-
-Always call `coordinator.async_cleanup_listeners()` in test teardown to prevent lingering timer errors. The test framework checks for uncanceled timers.
-
-## Extension patterns
-
-Add new triggers by subclassing `TriggerHandler` (see `triggers.py` lines 19-100). Implement `async_setup()`, `is_active()`, and `get_info()`. Register with `trigger_manager.add_trigger(name, instance)`.
-
-Add brightness logic by subclassing `BrightnessStrategy` and implementing `get_brightness(context)`. Context dict includes `is_house_active`, `is_dark_inside`, `motion_active`. Register with `light_controller.set_brightness_strategy()`.
-
-Add manual detection logic by subclassing `ManualInterventionStrategy`. The base class provides `is_integration_context()`. Return tuple of (is_manual: bool, reason: str) from `is_manual_intervention()`.
-
-## Config flow specifics
-
-The config flow uses two steps: basic setup collects entities, advanced setup collects timeouts and brightness. Use `vol.All(cv.ensure_list, [cv.entity_id])` for multi-entity fields, not `vol.Any()`.
-
-Entity validation happens in `_validate_input()` which checks for at least one light type. Don't validate entity existence - Home Assistant handles that.
-
-Reconfiguration reuses the same flow with pre-filled data. Use `self.config_entry.data.get(key, default)` when building schemas.
+Run tests with `uv run pytest tests/`.
+The tests use `pytest-homeassistant-custom-component`.
+Tests should mirror the structure of the source code.
 
 ## Common pitfalls
 
-Don't check `trigger.enabled` in `_async_motion_changed()` - always fire callbacks. The coordinator decides whether to act based on `motion_activation`.
-
-Don't use `timer.start_time` - it's private. Use `timer.end_time` or `timer.remaining_seconds` instead.
-
-Don't import from `homeassistant.components.occupancy_tracker` - this is a custom component, use `custom_components.occupancy_tracker`.
-
-The state sensor updates via `coordinator.async_update_listeners()`, not by calling `async_write_ha_state()` directly. The coordinator maintains `self.data` dict which sensors read.
+- **Config Flow**: Do not attempt to use or reference `config_flow.py` or `async_step_user`. This integration uses `async_setup` in `__init__.py`.
+- **Entity IDs**: Sensor keys in configuration are expected to be valid Home Assistant entity IDs (e.g., `binary_sensor.kitchen_motion`).
+- **Coordinator Access**: The coordinator is stored in `hass.data[DOMAIN]["coordinator"]`.
 
 ## File organization
 
-Tests mirror the source structure: `tests/occupancy_tracker/test_*.py` corresponds to `custom_components/occupancy_tracker/*.py`. Use `conftest.py` for shared fixtures.
-
-The `occupancy_tracker_rig` is a test helper integration that provides mock entities. Don't modify it unless adding new entity types for testing.
-
-Constants go in `const.py` using uppercase names. State strings use lowercase with hyphens (STATE_MOTION_AUTO = "motion-auto").
+- `custom_components/occupancy_tracker/`: Main component code.
+- `custom_components/occupancy_tracker/helpers/`: Helper classes (`types.py`, `warning.py`, etc.).
+- `tests/`: Test files mirroring the component structure.
 
 ## Readme writing style
 
