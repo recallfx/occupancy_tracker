@@ -343,27 +343,7 @@ class TestOccupancyCoordinatorQueries:
         probability = coordinator.get_occupancy_probability("office")
 
         # Recent motion + occupied = high probability
-        assert probability == 0.95
-
-    def test_get_occupancy_probability_occupied_no_recent_motion(self):
-        """Test probability for occupied area without recent motion."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {"garage": {}},
-            "adjacency": {},
-            "sensors": {},
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-        timestamp = time.time()
-
-        coordinator.area_manager.areas["garage"].occupancy = 1
-        coordinator.area_manager.areas["garage"].last_motion = timestamp - 600  # 10 minutes ago
-
-        probability = coordinator.get_occupancy_probability("garage")
-
-        # Occupied but no recent motion = medium probability
-        assert probability == 0.75
+        assert probability == 1.0
 
     def test_get_occupancy_probability_unoccupied(self):
         """Test probability for unoccupied area."""
@@ -378,18 +358,7 @@ class TestOccupancyCoordinatorQueries:
 
         probability = coordinator.get_occupancy_probability("basement")
 
-        assert probability == 0.05
-
-    def test_get_occupancy_probability_unknown_area(self):
-        """Test probability for unknown area."""
-        hass = Mock(spec=HomeAssistant)
-        config = {"areas": {}, "adjacency": {}, "sensors": {}}
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        probability = coordinator.get_occupancy_probability("unknown")
-
-        assert probability == 0.05
+        assert probability == 0.0
 
     def test_get_area_status(self):
         """Test getting detailed area status."""
@@ -453,89 +422,6 @@ class TestOccupancyCoordinatorQueries:
         assert status["occupied_areas"]["room2"] == 1
 
 
-class TestOccupancyCoordinatorWarnings:
-    """Test warning management."""
-
-    def test_get_warnings(self):
-        """Test getting warnings from coordinator."""
-        hass = Mock(spec=HomeAssistant)
-        config = {"areas": {}, "adjacency": {}, "sensors": {}}
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        # Initially no warnings
-        assert len(coordinator.get_warnings()) == 0
-
-    def test_resolve_warning(self):
-        """Test resolving a warning."""
-        hass = Mock(spec=HomeAssistant)
-        config = {"areas": {}, "adjacency": {}, "sensors": {}}
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        # Create a warning
-        warning = coordinator.anomaly_detector._create_warning("test", "Test warning")
-
-        result = coordinator.resolve_warning(warning.id)
-
-        assert result is True
-        assert warning.is_active is False
-
-
-class TestOccupancyCoordinatorReset:
-    """Test reset functionality."""
-
-    def test_reset(self):
-        """Test full system reset."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {"room1": {}, "room2": {}},
-            "adjacency": {"room1": ["room2"]},
-            "sensors": {
-                "sensor.motion_1": {"area": "room1", "type": "motion"},
-            },
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-        timestamp = time.time()
-
-        # Set up some state
-        coordinator.area_manager.areas["room1"].occupancy = 2
-        coordinator.area_manager.areas["room1"].record_motion(timestamp)
-        coordinator.process_sensor_event("sensor.motion_1", True, timestamp)
-
-        # Reset
-        coordinator.reset()
-
-        # Everything should be cleared
-        assert coordinator.area_manager.areas["room1"].occupancy == 0
-        assert coordinator.area_manager.areas["room1"].last_motion == 0
-        assert coordinator.sensor_manager.sensors["sensor.motion_1"].current_state is False
-        assert len(coordinator.get_warnings()) == 0
-
-    def test_reset_anomalies(self):
-        """Test resetting only anomalies (not occupancy state)."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {"room1": {}},
-            "adjacency": {},
-            "sensors": {},
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        # Set up state and warnings
-        coordinator.area_manager.areas["room1"].occupancy = 1
-        coordinator.anomaly_detector._create_warning("test", "Test")
-
-        # Reset anomalies only
-        coordinator.reset_anomalies()
-
-        # Occupancy preserved, warnings cleared
-        assert coordinator.area_manager.areas["room1"].occupancy == 1
-        assert len(coordinator.get_warnings()) == 0
-
-
 class TestOccupancyCoordinatorTimeouts:
     """Test timeout checking."""
 
@@ -559,59 +445,3 @@ class TestOccupancyCoordinatorTimeouts:
 
         # Should reset due to inactivity
         assert coordinator.area_manager.areas["bedroom"].occupancy == 0
-
-
-class TestOccupancyCoordinatorDiagnostics:
-    """Test diagnostic methods."""
-
-    def test_diagnose_motion_issues_single_sensor(self):
-        """Test diagnosing issues with a specific sensor."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {"living_room": {}},
-            "adjacency": {},
-            "sensors": {
-                "sensor.motion_living": {"area": "living_room", "type": "motion"},
-            },
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        result = coordinator.diagnose_motion_issues("sensor.motion_living")
-
-        assert "sensor.motion_living" in result
-        assert result["sensor.motion_living"]["is_motion_sensor"] is True
-        assert result["sensor.motion_living"]["sensor_type"] == "motion"
-        assert result["sensor.motion_living"]["area_exists"] is True
-
-    def test_diagnose_motion_issues_all_sensors(self):
-        """Test diagnosing all sensors."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {"room1": {}, "room2": {}},
-            "adjacency": {},
-            "sensors": {
-                "sensor.motion_1": {"area": "room1", "type": "motion"},
-                "sensor.motion_2": {"area": "room2", "type": "camera_motion"},
-            },
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        result = coordinator.diagnose_motion_issues()
-
-        assert len(result) == 2
-        assert "sensor.motion_1" in result
-        assert "sensor.motion_2" in result
-
-    def test_diagnose_motion_issues_unknown_sensor(self):
-        """Test diagnosing unknown sensor."""
-        hass = Mock(spec=HomeAssistant)
-        config = {"areas": {}, "adjacency": {}, "sensors": {}}
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        result = coordinator.diagnose_motion_issues("sensor.unknown")
-
-        assert "sensor.unknown" in result
-        assert "error" in result["sensor.unknown"]

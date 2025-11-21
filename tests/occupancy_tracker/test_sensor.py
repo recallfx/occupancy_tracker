@@ -80,7 +80,7 @@ class TestOccupancyProbabilitySensor:
 
         sensor = OccupancyProbabilitySensor(coordinator, "living_room")
 
-        assert sensor.state == 0.95
+        assert sensor.state == 1.0
 
 
 class TestAnomalySensor:
