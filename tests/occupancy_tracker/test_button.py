@@ -70,7 +70,7 @@ class TestAsyncSetupPlatform:
 
     async def test_setup_platform(self, hass):
         """Test setting up the button platform."""
-        from custom_components.occupancy_tracker import DOMAIN
+        from custom_components.occupancy_tracker.const import DOMAIN
 
         # Create tracker and add to hass.data
         config = {
@@ -97,7 +97,7 @@ class TestAsyncSetupPlatform:
 
     async def test_setup_platform_with_discovery_info(self, hass):
         """Test setup with discovery_info parameter."""
-        from custom_components.occupancy_tracker import DOMAIN
+        from custom_components.occupancy_tracker.const import DOMAIN
 
         config = {
             "areas": {},

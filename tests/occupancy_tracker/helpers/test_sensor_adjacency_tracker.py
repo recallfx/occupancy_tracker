@@ -2,7 +2,7 @@
 
 import time
 
-from custom_components.occupancy_tracker.components.sensor_adjacency_tracker import (
+from custom_components.occupancy_tracker.helpers.sensor_adjacency_tracker import (
     SensorAdjacencyTracker,
 )
 

@@ -2,12 +2,12 @@
 
 import time
 
-from custom_components.occupancy_tracker.components.anomaly_detector import (
+from custom_components.occupancy_tracker.helpers.anomaly_detector import (
     AnomalyDetector,
 )
-from custom_components.occupancy_tracker.components.area_state import AreaState
-from custom_components.occupancy_tracker.components.sensor_state import SensorState
-from custom_components.occupancy_tracker.components.sensor_adjacency_tracker import (
+from custom_components.occupancy_tracker.helpers.area_state import AreaState
+from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
+from custom_components.occupancy_tracker.helpers.sensor_adjacency_tracker import (
     SensorAdjacencyTracker,
 )
 

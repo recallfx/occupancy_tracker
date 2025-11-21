@@ -286,7 +286,7 @@ class TestAsyncSetupPlatform:
 
     async def test_setup_platform(self, hass):
         """Test setting up the sensor platform."""
-        from custom_components.occupancy_tracker import DOMAIN
+        from custom_components.occupancy_tracker.const import DOMAIN
 
         # Create tracker and add to hass.data
         config = {
@@ -317,7 +317,7 @@ class TestAsyncSetupPlatform:
 
     async def test_setup_platform_creates_all_sensor_types(self, hass):
         """Test that all sensor types are created."""
-        from custom_components.occupancy_tracker import DOMAIN
+        from custom_components.occupancy_tracker.const import DOMAIN
 
         config = {
             "areas": {"room1": {}},

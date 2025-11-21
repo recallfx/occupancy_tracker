@@ -3,12 +3,12 @@ import logging
 
 from typing import Dict, List, Optional, Any
 
-from .components.sensor_state import SensorState
-from .components.area_state import AreaState
-from .components.sensor_adjacency_tracker import SensorAdjacencyTracker
-from .components.warning import Warning
-from .components.types import OccupancyTrackerConfig
-from .components.anomaly_detector import AnomalyDetector
+from .helpers.sensor_state import SensorState
+from .helpers.area_state import AreaState
+from .helpers.sensor_adjacency_tracker import SensorAdjacencyTracker
+from .helpers.warning import Warning
+from .helpers.types import OccupancyTrackerConfig
+from .helpers.anomaly_detector import AnomalyDetector
 
 # Configure logger
 logger = logging.getLogger(__name__)

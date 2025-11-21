@@ -8,14 +8,13 @@ import voluptuous as vol
 from homeassistant.core import Event, HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .components.types import OccupancyTrackerConfig
-from .occupancy_tracker import OccupancyTracker
+from .const import DOMAIN
+from .helpers.types import OccupancyTrackerConfig
+from .coordinator import OccupancyCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-DOMAIN = "occupancy_tracker"
 
 # Schema for individual sensor configuration
 SENSOR_SCHEMA = vol.Schema(
@@ -62,12 +61,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "sensors": conf.get("sensors", {}),
     }
 
-    # Create the occupancy system instance.
-    occupancy_tracker = OccupancyTracker(
-        occupancy_config,
-    )
-
-    hass.data[DOMAIN] = {"occupancy_tracker": occupancy_tracker}
+    # Create the coordinator instance.
+    coordinator = OccupancyCoordinator(hass, occupancy_config)
+    
+    # Store the coordinator
+    hass.data[DOMAIN] = {"coordinator": coordinator}
 
     async def state_change_listener(event: Event) -> None:
         """Handle state changes for sensors."""
@@ -88,10 +86,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             # Interpret HA state: 'on' becomes True; any other value is False
             sensor_state = new_state.state.lower() == "on"
             timestamp = time.time()
-            occupancy_tracker.process_sensor_event(
+            
+            # Process event through coordinator
+            coordinator.process_sensor_event(
                 entity_id, sensor_state, timestamp=timestamp
             )
-            async_dispatcher_send(hass, f"{DOMAIN}_update")
 
     # Set up state listeners for each sensor entity defined in the occupancy config.
     sensor_entities = list(occupancy_config.get("sensors", {}).keys())
