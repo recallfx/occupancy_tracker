@@ -2,9 +2,10 @@
 description: Run tests using uv
 ---
 
-To run tests for this project, use `uv run pytest`.
+# Running Tests
 
-1. Run all tests:
+Use the command below to run the test suite:
+
 ```bash
 uv run pytest
 ```
