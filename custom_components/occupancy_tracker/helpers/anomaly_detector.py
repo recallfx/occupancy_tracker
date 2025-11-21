@@ -95,6 +95,8 @@ class AnomalyDetector:
 
         # Check adjacent areas for recent activity
         adjacency = self.config.get("adjacency", {}).get(area.id, [])
+        
+        # First pass: Look for adjacent areas with RECENT motion (high confidence)
         for adjacent_area_id in adjacency:
             if adjacent_area_id in areas:
                 adjacent_area = areas[adjacent_area_id]
@@ -103,9 +105,21 @@ class AnomalyDetector:
                 ):
                     # Likely moved from adjacent occupied room
                     valid_entry = True
-                    logger.info(f"Person moved from {adjacent_area_id} to {area.id}")
+                    logger.info(f"Person moved from {adjacent_area_id} to {area.id} (recent motion)")
                     adjacent_area.record_exit(timestamp)
                     break
+        
+        # Second pass: If no recent motion found, look for ANY occupied adjacent area (Sleep Scenario)
+        if not valid_entry:
+            for adjacent_area_id in adjacency:
+                if adjacent_area_id in areas:
+                    adjacent_area = areas[adjacent_area_id]
+                    if adjacent_area.occupancy > 0:
+                        # Moved from occupied room (even if inactive/sleeping)
+                        valid_entry = True
+                        logger.info(f"Person moved from {adjacent_area_id} to {area.id} (sleep/inactive)")
+                        adjacent_area.record_exit(timestamp)
+                        break
 
         # Check if there was recent motion in adjacent areas using adjacency tracker
         if not valid_entry:
@@ -166,6 +180,26 @@ class AnomalyDetector:
         """Check for timeout conditions like inactivity and extended occupancy."""
 
         for area_id, area in areas.items():
+            # Check exit-capable areas for auto-clear (shorter timeout)
+            if area.is_exit_capable and area.occupancy > 0:
+                # Exit-capable areas clear after 5 minutes of inactivity
+                # (people can leave the system from these areas)
+                exit_timeout = 300  # 5 minutes
+                inactivity_duration = area.get_inactivity_duration(timestamp)
+                
+                if inactivity_duration > exit_timeout:
+                    logger.info(
+                        f"Auto-clearing exit-capable area {area_id} after {inactivity_duration:.0f}s of inactivity"
+                    )
+                    area.occupancy = 0
+                    self._create_warning(
+                        "exit_area_auto_clear",
+                        f"Exit-capable area {area_id} was auto-cleared after {inactivity_duration / 60:.1f} minutes of inactivity",
+                        area=area_id,
+                        timestamp=timestamp,
+                    )
+                    continue  # Skip regular timeout checks for this area
+            
             # Check for inactivity timeout if area is occupied
             if area.occupancy > 0:
                 inactivity_duration = area.get_inactivity_duration(timestamp)

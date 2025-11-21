@@ -159,7 +159,9 @@ class SensorManager:
 
         # Check for unexpected motion
         if area.occupancy == 0:
-            self._handle_unexpected_motion(area, timestamp)
+            # Get current probability to inform decision
+            current_prob = self.area_manager.get_occupancy_probability(area_id)
+            self._handle_unexpected_motion(area, timestamp, current_prob)
 
         # Check for simultaneous motion in adjacent areas
         self._check_simultaneous_motion(area_id, timestamp)
@@ -180,7 +182,7 @@ class SensorManager:
         # Door/window events are generally just recorded but don't directly change occupancy
         # They help confirm transitions between areas
 
-    def _handle_unexpected_motion(self, area: Any, timestamp: float) -> None:
+    def _handle_unexpected_motion(self, area: Any, timestamp: float, probability: float = 0.0) -> None:
         """Handle unexpected motion in an area that should be unoccupied."""
         # Delegate to anomaly detector to evaluate if this is a valid entry or anomaly
         self.anomaly_detector.handle_unexpected_motion(

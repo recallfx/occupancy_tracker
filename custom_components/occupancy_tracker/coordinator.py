@@ -69,6 +69,7 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if timestamp is None:
             timestamp = time.time()
         self.anomaly_detector.check_timeouts(self.area_manager.get_all_areas(), timestamp)
+        # Always update data to reflect probability decay
         self.async_set_updated_data(self.get_system_status())
 
     def resolve_warning(self, warning_id: str) -> bool:

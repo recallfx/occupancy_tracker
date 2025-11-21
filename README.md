@@ -11,7 +11,10 @@ A sophisticated occupancy tracking integration that combines probabilistic state
   - Special handling for exit-capable areas (e.g., frontyard, backyard)
 
 - **Robust Occupancy Detection**:
-  - Probabilistic occupancy scoring (0.05 to 0.95 confidence)
+  - Dynamic probability scoring with exponential decay (1.0 → 0.1 over time)
+  - High confidence (1.0) for recent motion (0-60s)
+  - Medium confidence (0.9) for motion within 5 minutes
+  - Gradual decay after 5 minutes to handle sleep/sedentary scenarios
   - Handles simultaneous multi-occupant scenarios
   - Motion clearing time considerations (5s default threshold)
   - Preserves occupancy during no-motion periods (e.g., sleep scenarios)
@@ -109,7 +112,7 @@ sensors:
 - Multiple occupant tracking with preserved counts (e.g., if 2 occupants in bathroom, 1 moves to bedroom)
 - Chain movement tracking (e.g., bathroom → bedroom → hall) with probability degradation
 - Motion clearing reduces confidence but doesn't remove occupancy (75% confidence after clearing)
-- Exit-capable areas (like frontyard) automatically clear occupancy when motion stops
+- Exit-capable areas (like frontyard) automatically clear occupancy after 5 minutes of inactivity (since people can leave the system from these areas)
 
 ### Sensor Behaviors
 - Motion sensors: Primary room presence detection

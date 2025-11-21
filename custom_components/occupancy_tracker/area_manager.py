@@ -43,23 +43,44 @@ class AreaManager:
             return 0
         return self.areas[area_id].occupancy
 
-    def get_occupancy_probability(self, area_id: str) -> float:
+    def get_occupancy_probability(self, area_id: str, timestamp: float = None) -> float:
         """Get probability score (0-1) that area is occupied."""
         if area_id not in self.areas:
-            return 0.05
+            return 0.0
 
         area = self.areas[area_id]
-        now = time.time()
+        now = timestamp if timestamp is not None else time.time()
 
         if area.occupancy <= 0:
-            return 0.05
+            return 0.0
 
-        # If there's been motion in the last 5 minutes, high probability
-        if now - area.last_motion < 300:
-            return 0.95
-
-        # Occupied but no recent motion - slightly lower probability
-        return 0.75
+        time_since_motion = now - area.last_motion
+        
+        # High confidence period (0-60s)
+        if time_since_motion < 60:
+            return 1.0
+            
+        # Medium confidence period (1-5 mins)
+        if time_since_motion < 300:
+            return 0.9
+            
+        # Decay period (> 5 mins)
+        # Decay from 0.9 down to 0.1 over 1 hour (3600s)
+        # Formula: P(t) = 0.1 + 0.8 * e^(-k * (t - 300))
+        # We want P(3600) approx 0.5
+        # 0.5 = 0.1 + 0.8 * e^(-k * 3300)
+        # 0.4 = 0.8 * e^(-k * 3300)
+        # 0.5 = e^(-k * 3300)
+        # ln(0.5) = -k * 3300
+        # -0.693 = -k * 3300
+        # k approx 0.00021
+        
+        k = 0.00021
+        decay_time = time_since_motion - 300
+        import math
+        probability = 0.1 + 0.8 * math.exp(-k * decay_time)
+        
+        return round(probability, 2)
 
     def reset(self) -> None:
         """Reset all areas."""
