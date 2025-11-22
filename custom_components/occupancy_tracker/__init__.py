@@ -8,7 +8,8 @@ import voluptuous as vol
 from homeassistant.core import Event, HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from datetime import timedelta
 
 from .const import DOMAIN
 from .helpers.types import OccupancyTrackerConfig
@@ -100,6 +101,22 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     sensor_entities = list(occupancy_config.get("sensors", {}).keys())
     if sensor_entities:
         async_track_state_change_event(hass, sensor_entities, state_change_listener)
+
+    # Set up periodic check for timeouts (every 60 seconds)
+    async def interval_listener(now) -> None:
+        """Handle periodic checks."""
+        coordinator.check_timeouts(timestamp=now.timestamp())
+
+    remove_interval = async_track_time_interval(hass, interval_listener, timedelta(seconds=60))
+    hass.data[DOMAIN]["remove_update_listener"] = remove_interval
+
+    # Ensure timer is cleaned up when HA stops
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+    
+    async def _cleanup_timer(event):
+        remove_interval()
+        
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _cleanup_timer)
 
     # Set up the sensor platform
     await async_load_platform(hass, "sensor", DOMAIN, {}, config)
