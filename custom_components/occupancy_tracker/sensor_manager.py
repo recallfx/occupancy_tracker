@@ -224,14 +224,14 @@ class SensorManager:
     def _handle_unexpected_motion(self, area: Any, timestamp: float, probability: float = 0.0) -> None:
         """Handle unexpected motion in an area that should be unoccupied."""
         # Delegate to anomaly detector to evaluate if this is a valid entry or anomaly
-        self.anomaly_detector.handle_unexpected_motion(
+        valid_entry = self.anomaly_detector.handle_unexpected_motion(
             area, self.area_manager.get_all_areas(), self.sensors, timestamp, self.adjacency_tracker
         )
 
-        # Always increment occupancy - if valid_entry is True, the person moved from
-        # an adjacent area (which was decremented). If False, it's a new entry or anomaly.
-        # Either way, someone is now in this area.
-        area.record_entry(timestamp)
+        # Only increment occupancy if it's a valid entry (from adjacent area or outside)
+        # This prevents "ghost" occupancy from single false positive sensor events
+        if valid_entry:
+            area.record_entry(timestamp)
 
     def _check_simultaneous_motion(
         self, trigger_area_id: str, timestamp: float

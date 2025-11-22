@@ -54,6 +54,11 @@ class AreaManager:
         if area.occupancy <= 0:
             return 0.0
 
+        # If area is occupied but no motion ever recorded (e.g. manually set),
+        # assume high confidence
+        if area.last_motion == 0:
+            return 1.0
+
         time_since_motion = now - area.last_motion
         
         # High confidence period (0-60s)

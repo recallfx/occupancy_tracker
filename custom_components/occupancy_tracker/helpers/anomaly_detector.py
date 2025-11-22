@@ -139,6 +139,7 @@ class AnomalyDetector:
             # Could be entry from outside if this is an entry point
             if area.is_exit_capable:
                 logger.info(f"Person entered {area.id} from outside")
+                valid_entry = True
             else:
                 logger.warning(
                     f"Unexpected motion in {area.id} without clear entry path"
