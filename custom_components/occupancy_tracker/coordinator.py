@@ -99,6 +99,12 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         _LOGGER.info("Anomaly detection system reset")
         self.async_set_updated_data(self.diagnostics.get_system_status())
 
+    def reset_warnings(self) -> None:
+        """Clear all active warnings without altering other state."""
+        if self.anomaly_detector.clear_warnings():
+            _LOGGER.info("Active warnings cleared")
+            self.async_set_updated_data(self.diagnostics.get_system_status())
+
     def reset(self) -> None:
         """Reset the entire system state."""
         self.area_manager.reset()

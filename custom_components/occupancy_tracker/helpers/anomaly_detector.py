@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, List, Optional
+from collections import deque
+from typing import Dict, List, Optional, Set
 
 from .area_state import AreaState
 from .sensor_state import SensorState
@@ -19,6 +20,17 @@ class AnomalyDetector:
         self.recent_motion_window = 120  # 2 minutes
         self.motion_timeout = 24 * 3600  # 24 hours
         self.extended_occupancy_threshold = 12 * 3600  # 12 hours
+        self.adjacency_map = self._build_adjacency(config)
+
+    def _build_adjacency(self, config: OccupancyTrackerConfig) -> Dict[str, List[str]]:
+        adjacency_config = config.get("adjacency", {}) if isinstance(config, dict) else {}
+        adjacency_map: Dict[str, Set[str]] = {}
+        for area_id, neighbors in adjacency_config.items():
+            area_set = adjacency_map.setdefault(area_id, set())
+            for neighbor_id in neighbors:
+                area_set.add(neighbor_id)
+                adjacency_map.setdefault(neighbor_id, set()).add(area_id)
+        return {area_id: sorted(list(neighbors)) for area_id, neighbors in adjacency_map.items()}
 
     def check_for_stuck_sensors(
         self,
@@ -79,7 +91,7 @@ class AnomalyDetector:
         valid_entry = False
 
         # Check adjacent areas for recent activity
-        adjacency = self.config.get("adjacency", {}).get(area.id, [])
+        adjacency = self.adjacency_map.get(area.id, [])
         
         # First pass: Look for adjacent areas with RECENT motion (high confidence)
         for adjacent_area_id in adjacency:
@@ -145,15 +157,15 @@ class AnomalyDetector:
         # Get list of areas with recent motion
         areas_with_recent_motion = []
         for area_id, area in areas.items():
-            if area_id != trigger_area_id and area.has_recent_motion(
-                timestamp, 10
-            ):  # Motion within 10 seconds
+            if area_id != trigger_area_id and area.has_recent_motion(timestamp, 10):
                 areas_with_recent_motion.append(area_id)
 
         if areas_with_recent_motion:
-            # Check if any are not adjacent to the trigger area
-            adjacency = self.config.get("adjacency", {}).get(trigger_area_id, [])
-            non_adjacent = [a for a in areas_with_recent_motion if a not in adjacency]
+            non_adjacent = [
+                area_id
+                for area_id in areas_with_recent_motion
+                if not self._has_path_within_hops(trigger_area_id, area_id, 2)
+            ]
 
             if non_adjacent:
                 self._create_warning(
@@ -161,6 +173,24 @@ class AnomalyDetector:
                     f"Motion detected simultaneously in non-adjacent areas: {trigger_area_id} and {', '.join(non_adjacent)}",
                     timestamp=timestamp,
                 )
+
+    def _has_path_within_hops(self, start: str, goal: str, max_hops: int) -> bool:
+        if start == goal:
+            return True
+        visited = set([start])
+        queue = deque([(start, 0)])
+
+        while queue:
+            node, depth = queue.popleft()
+            if depth >= max_hops:
+                continue
+            for neighbor in self.adjacency_map.get(node, []):
+                if neighbor == goal:
+                    return True
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, depth + 1))
+        return False
 
     def check_timeouts(self, areas: Dict[str, AreaState], timestamp: float) -> None:
         """Check for timeout conditions like inactivity and extended occupancy."""
@@ -251,3 +281,12 @@ class AnomalyDetector:
                 warning.resolve()
                 return True
         return False
+
+    def clear_warnings(self) -> bool:
+        """Resolve all active warnings."""
+        cleared = False
+        for warning in self.warnings:
+            if warning.is_active:
+                warning.resolve()
+                cleared = True
+        return cleared

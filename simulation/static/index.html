@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Occupancy Tracker Simulation</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <button id="sidebarToggle" class="icon-button" aria-label="Toggle sidebar">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <h1>Occupancy Tracker Simulation</h1>
+        </div>
+        <div class="header-right">
+            <div id="connectionStatus" class="status-badge">Connecting...</div>
+        </div>
+    </header>
+
+    <aside>
+        <div>
+            <div class="section-title">System Status</div>
+            <div class="stat-row">
+                <span>Total Occupancy</span>
+                <span id="totalOccupancy" style="color: var(--text-primary); font-weight: bold;">0</span>
+            </div>
+            <div class="stat-row">
+                <span>Active Warnings</span>
+                <span id="activeWarningsCount" style="color: var(--text-primary); font-weight: bold;">0</span>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title with-action">
+                <span>Active Warnings</span>
+                <button id="resetWarningsButton" class="ghost-button" disabled>Reset</button>
+            </div>
+            <div id="warningsList" class="warning-list">
+                <!-- Warnings injected here -->
+                <div style="color: var(--text-secondary); font-size: 0.8rem; font-style: italic;">No active warnings</div>
+            </div>
+        </div>
+
+        <div>
+            <div class="section-title">Sensors</div>
+            <div id="sensorsList" class="sensor-list">
+                <!-- Sensors injected here -->
+            </div>
+        </div>
+    </aside>
+
+    <main>
+        <div class="legend">
+            <div class="legend-item"><div class="dot" style="background: blue"></div> Motion</div>
+            <div class="legend-item"><div class="dot" style="background: green"></div> Magnetic</div>
+            <div class="legend-item"><div class="dot" style="background: purple"></div> Camera</div>
+            <div class="legend-item"><div class="dot" style="background: red"></div> Person (Drag me)</div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="simCanvas" width="800" height="600"></canvas>
+        </div>
+
+        <div class="section-title" style="margin-top: 20px;">Area States</div>
+        <div id="areasGrid" class="areas-grid">
+            <!-- Area cards injected here -->
+        </div>
+    </main>
+
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

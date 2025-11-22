@@ -196,7 +196,15 @@ class SensorManager:
     ) -> None:
         """Process door/window sensor events."""
         sensor = self.sensors[sensor_id]
-        between_areas = sensor.config.get("between_areas", [])
+        between_areas = sensor.config.get("between_areas")
+        if not between_areas:
+            area_config = sensor.config.get("area")
+            if isinstance(area_config, list):
+                between_areas = area_config
+            elif isinstance(area_config, str):
+                between_areas = [area_config]
+            else:
+                between_areas = []
 
         if len(between_areas) != 2:
             _LOGGER.warning(
