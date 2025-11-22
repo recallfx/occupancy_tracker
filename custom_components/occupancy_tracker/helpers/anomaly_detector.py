@@ -28,50 +28,35 @@ class AnomalyDetector:
     ) -> None:
         """Check for stuck sensors when a sensor is triggered."""
         triggered_sensor = sensors[triggered_sensor_id]
-        area_id = triggered_sensor.config.get("area")
+        area_config = triggered_sensor.config.get("area")
 
-        if not area_id or area_id not in areas:
+        if not area_config:
             return
+            
+        # We don't need to check if area exists here, as we just want to trigger the check
+        # The actual check iterates over all sensors
 
-        # Get adjacent areas from configuration
-        adjacency = self.config.get("adjacency", {}).get(area_id, [])
+        # Update adjacent area motion records for all sensors in adjacent areas
+        # This logic is complex with bridging sensors, and the "adjacent motion implies stuck"
+        # logic is being removed, so we can simplify this.
+        # We only need to check for "Stuck ON" (timeout) which doesn't require adjacency info.
 
-        # Update adjacent area motion records for all sensors in those areas
-        for adjacent_area_id in adjacency:
-            for sensor_id, sensor in sensors.items():
-                if sensor.config.get("area") == adjacent_area_id:
-                    sensor.record_adjacent_motion(
-                        area_id, triggered_sensor.last_update_time
-                    )
-
-        # Check if sensors are stuck - need to calculate first!
+        # Check if sensors are stuck
         for sensor_id, sensor in sensors.items():
-            # Get adjacent areas for this sensor's area
-            sensor_area = sensor.config.get("area")
-            if not sensor_area:
-                continue
-
-            # Check if there was recent motion in adjacent areas
-            sensor_adjacency = self.config.get("adjacency", {}).get(sensor_area, [])
-            has_recent_adjacent_motion = any(
-                areas.get(adj_area_id)
-                and areas[adj_area_id].has_recent_motion(
-                    triggered_sensor.last_update_time, 60
-                )
-                for adj_area_id in sensor_adjacency
-            )
-
-            # Now calculate if stuck
+            # Calculate if stuck (only checks for long active duration now)
             is_stuck = sensor.calculate_is_stuck(
-                has_recent_adjacent_motion, triggered_sensor.last_update_time
+                False, triggered_sensor.last_update_time
             )
 
             if is_stuck and sensor.is_reliable:
                 sensor_area = sensor.config.get("area", "unknown")
+                # Handle list of areas for display
+                area_str = str(sensor_area) if isinstance(sensor_area, list) else sensor_area
+                
                 self._create_warning(
                     "stuck_sensor",
-                    f"Sensor {sensor_id} in area {sensor_area} may be stuck",
-                    area=sensor_area,
+                    f"Sensor {sensor_id} in area {area_str} may be stuck",
+                    area=area_str,
                     sensor_id=sensor_id,
                     timestamp=triggered_sensor.last_update_time,
                 )

@@ -45,13 +45,9 @@ class SensorState:
             self.is_stuck = True
             return True
 
-        # For any state, check if there's been adjacent area activity that should have triggered this sensor
-        sensor_type = self.config.get("type", "")
-        if sensor_type in ["motion", "camera_motion", "camera_person"]:
-            # If recent motion in adjacent area but no state change here for a while
-            if has_recent_adjacent_motion and (timestamp - self.last_changed) > 30:
-                self.is_stuck = True
-                return True
+        # Removed "adjacent motion implies stuck" logic as it produces false positives.
+        # A sensor being OFF while adjacent areas are active is a normal condition 
+        # (e.g. person is in the adjacent room but not entering this one).
 
         self.is_stuck = False
         return False

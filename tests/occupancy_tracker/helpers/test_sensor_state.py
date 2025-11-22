@@ -96,12 +96,13 @@ class TestSensorState:
         sensor.update_state(False, timestamp)
 
         # Check with recent adjacent motion but sensor hasn't changed for 60 seconds
+        # This logic was removed as it caused false positives
         is_stuck = sensor.calculate_is_stuck(
             has_recent_adjacent_motion=True, timestamp=timestamp + 60
         )
 
-        assert is_stuck is True
-        assert sensor.is_stuck is True
+        assert is_stuck is False
+        assert sensor.is_stuck is False
 
     def test_calculate_is_stuck_not_stuck(self):
         """Test sensor that is not stuck."""
