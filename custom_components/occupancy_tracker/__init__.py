@@ -61,6 +61,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "sensors": conf.get("sensors", {}),
     }
 
+    # Validate configuration
+    if not _validate_config(occupancy_config):
+        return False
+
     # Create the coordinator instance.
     coordinator = OccupancyCoordinator(hass, occupancy_config)
     
@@ -104,4 +108,42 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_load_platform(hass, "button", DOMAIN, {}, config)
 
     _LOGGER.info("Occupancy Tracker integration set up successfully")
+    return True
+
+
+def _validate_config(config: OccupancyTrackerConfig) -> bool:
+    """Validate that all referenced areas exist."""
+    areas = config.get("areas", {})
+    adjacency = config.get("adjacency", {})
+    sensors = config.get("sensors", {})
+    
+    # Validate adjacency
+    for area_id, adjacent_areas in adjacency.items():
+        if area_id not in areas:
+            _LOGGER.error(f"Adjacency config references unknown area: {area_id}")
+            return False
+        for adj_id in adjacent_areas:
+            if adj_id not in areas:
+                _LOGGER.error(f"Adjacency config for {area_id} references unknown area: {adj_id}")
+                return False
+                
+    # Validate sensors
+    for sensor_id, sensor_config in sensors.items():
+        area_config = sensor_config.get("area")
+        if area_config:
+            area_ids = area_config if isinstance(area_config, list) else [area_config]
+            for area_id in area_ids:
+                if area_id not in areas:
+                    _LOGGER.error(f"Sensor {sensor_id} references unknown area: {area_id}")
+                    return False
+                
+        # Validate between_areas for magnetic sensors
+        if sensor_config.get("type") == "magnetic":
+            between = sensor_config.get("between_areas")
+            if between:
+                for area_id in between:
+                    if area_id not in areas:
+                        _LOGGER.error(f"Sensor {sensor_id} between_areas references unknown area: {area_id}")
+                        return False
+
     return True
