@@ -188,11 +188,48 @@ Two reset options are available:
 - `ruff` for code linting
 
 ### Testing
-The project includes comprehensive test suites:
-- `test_occupancy_tracker.py`: Core movement and transition logic
-- `test_anomaly_detector.py`: Anomaly detection validation
-- `test_sensor_adjacency_tracker.py`: Adjacency mapping validation
-- `test_config_validator.py`: Configuration validation
+
+The project includes comprehensive test suites organized into two categories:
+
+#### Unit Tests (`tests/occupancy_tracker/`)
+
+Test individual components in isolation:
+- **Core Components**: `test_coordinator_core.py`, `test_coordinator_diagnostics.py`, `test_coordinator_warnings_reset.py`
+- **Helpers**: `test_anomaly_detector.py`, `test_area_state.py`, `test_sensor_adjacency_tracker.py`, `test_sensor_state.py`, `test_warning.py`
+- **Entities**: `test_sensor.py`, `test_button.py`
+- **System**: `test_init.py`, `test_exit_capable.py`, `test_probability.py`
+
+#### Integration Tests (`tests/integration/`)
+
+Test complete system behavior in realistic scenarios:
+- **End-to-End Scenarios**: Person journeys, sleep scenarios, sensor lifecycle
+- **Multi-Sensor Coordination**: Bridging sensors, camera coordination, timing interactions
+- **Real-World Scenarios**: Daily routines, multi-occupant, work-from-home, visitors
+- **Anomaly Detection**: Long activations, impossible appearances, multi-anomaly scenarios
+- **System Functions**: Diagnostics, reset functionality, status queries
+
+See [`tests/integration/README.md`](tests/integration/README.md) for detailed integration test documentation.
+
+#### Running Tests
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run only unit tests
+uv run pytest tests/occupancy_tracker/ -v
+
+# Run only integration tests
+uv run pytest tests/integration/ -v
+
+# Run specific test categories
+uv run pytest tests/integration/ -v -m end_to_end
+uv run pytest tests/integration/ -v -m scenarios
+uv run pytest tests/integration/ -v -m anomaly
+
+# Run with coverage
+uv run pytest tests/ --cov=custom_components.occupancy_tracker --cov-report=term-missing
+```
 
 ### Configuration Validation
 The system validates:

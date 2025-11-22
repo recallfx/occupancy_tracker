@@ -60,9 +60,9 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         """Get current occupancy count for an area."""
         return self.area_manager.get_occupancy(area_id)
 
-    def get_occupancy_probability(self, area_id: str) -> float:
+    def get_occupancy_probability(self, area_id: str, timestamp: float = None) -> float:
         """Get probability score (0-1) that area is occupied."""
-        return self.area_manager.get_occupancy_probability(area_id)
+        return self.area_manager.get_occupancy_probability(area_id, timestamp)
 
     def get_warnings(self, active_only: bool = True) -> List[Warning]:
         """Get list of warnings."""
