@@ -8,8 +8,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from custom_components.occupancy_tracker.coordinator import OccupancyCoordinator
-from custom_components.occupancy_tracker.helpers.sensor_adjacency_tracker import SensorAdjacencyTracker
 from custom_components.occupancy_tracker.helpers.anomaly_detector import AnomalyDetector
+from custom_components.occupancy_tracker.helpers.map_state_recorder import MapStateRecorder
 from custom_components.occupancy_tracker.area_manager import AreaManager
 from custom_components.occupancy_tracker.sensor_manager import SensorManager
 from custom_components.occupancy_tracker.diagnostics import OccupancyDiagnostics
@@ -28,14 +28,14 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         self.last_event_time = time.time()
         
         # Initialize helpers
-        self.adjacency_tracker = SensorAdjacencyTracker()
         self.anomaly_detector = AnomalyDetector(config)
+        self.state_recorder = MapStateRecorder()
         self.area_manager = AreaManager(config)
         self.sensor_manager = SensorManager(
             config, 
             self.area_manager, 
-            self.adjacency_tracker, 
-            self.anomaly_detector
+            self.anomaly_detector,
+            state_recorder=self.state_recorder,
         )
         self.diagnostics = OccupancyDiagnostics(self)
         self.data = self.get_simulation_state()
@@ -99,6 +99,11 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         if timestamp is None:
             timestamp = time.time()
         self.anomaly_detector.check_timeouts(self.area_manager.get_all_areas(), timestamp)
+        self.state_recorder.maybe_record_tick(
+            timestamp,
+            self.area_manager.get_all_areas(),
+            self.sensor_manager.sensors,
+        )
         self.async_set_updated_data(self.get_simulation_state())
 
     def reset_warnings(self) -> None:

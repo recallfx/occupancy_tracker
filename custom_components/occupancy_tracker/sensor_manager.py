@@ -3,9 +3,10 @@ import time
 import logging
 
 from .helpers.sensor_state import SensorState
-from .helpers.sensor_adjacency_tracker import SensorAdjacencyTracker
 from .helpers.anomaly_detector import AnomalyDetector
+from .helpers.map_state_recorder import MapStateRecorder
 from .area_manager import AreaManager
+from .helpers.area_state import AreaState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -16,58 +17,22 @@ class SensorManager:
         self, 
         config: Dict[str, Any], 
         area_manager: AreaManager,
-        adjacency_tracker: SensorAdjacencyTracker,
-        anomaly_detector: AnomalyDetector
+        anomaly_detector: AnomalyDetector,
+        state_recorder: Optional[MapStateRecorder] = None,
     ):
         self.config = config
         self.area_manager = area_manager
-        self.adjacency_tracker = adjacency_tracker
         self.anomaly_detector = anomaly_detector
+        self.state_recorder = state_recorder
         self.sensors: Dict[str, SensorState] = {}
+
         self._initialize_sensors()
-        self._initialize_adjacency()
 
     def _initialize_sensors(self) -> None:
         """Initialize sensor tracking objects from configuration."""
         for sensor_id, sensor_config in self.config.get("sensors", {}).items():
             self.sensors[sensor_id] = SensorState(sensor_id, sensor_config, time.time())
 
-    def _initialize_adjacency(self) -> None:
-        """Initialize sensor adjacency relationships from configuration."""
-        adjacency_config = self.config.get("adjacency", {})
-
-        # Build adjacency map for sensors based on their areas
-        for sensor_id, sensor in self.sensors.items():
-            area_config = sensor.config.get("area")
-            if not area_config:
-                continue
-
-            # Handle both single area (str) and multiple areas (list)
-            area_ids = area_config if isinstance(area_config, list) else [area_config]
-
-            # Register sensor-to-area mapping
-            for area_id in area_ids:
-                self.adjacency_tracker.add_sensor_area(sensor_id, area_id)
-
-            # Find sensors in adjacent areas
-            adjacent_sensors = set()
-
-            for area_id in area_ids:
-                adjacent_areas = adjacency_config.get(area_id, [])
-                
-                for adjacent_area_id in adjacent_areas:
-                    for other_sensor_id, other_sensor in self.sensors.items():
-                        other_area_config = other_sensor.config.get("area")
-                        if not other_area_config:
-                            continue
-                            
-                        other_area_ids = other_area_config if isinstance(other_area_config, list) else [other_area_config]
-                        
-                        if adjacent_area_id in other_area_ids:
-                            adjacent_sensors.add(other_sensor_id)
-
-            # Set adjacency for this sensor
-            self.adjacency_tracker.set_adjacency(sensor_id, adjacent_sensors)
 
     def process_sensor_event(
         self, sensor_id: str, state: bool, timestamp: float
@@ -93,15 +58,7 @@ class SensorManager:
             _LOGGER.debug(f"Motion sensor {sensor_id} state_changed={state_changed}")
 
         # Skip processing if state didn't actually change
-        if not state_changed and state is True:
-            # Only motion sensors have meaningful repeated "ON" states
-            if sensor.config.get("type", "") in [
-                "motion",
-                "camera_motion",
-                "camera_person",
-            ]:
-                _LOGGER.debug(f"Processing repeated motion for {sensor_id}")
-                self._process_repeated_motion(sensor_id, timestamp)
+        if not state_changed:
             return False
 
         # Process different sensor types
@@ -114,6 +71,8 @@ class SensorManager:
 
         # Check for stuck sensors after processing the event
         self._check_for_stuck_sensors(sensor_id, timestamp)
+
+        self._record_snapshot(sensor_id, state, timestamp)
         
         return True
 
@@ -121,43 +80,22 @@ class SensorManager:
         self, triggered_sensor_id: str, timestamp: float
     ) -> None:
         """Check for stuck sensors when a sensor is triggered."""
-        triggered_sensor = self.sensors[triggered_sensor_id]
-        area_config = triggered_sensor.config.get("area")
-
-        if not area_config:
-            return
-            
-        area_ids = area_config if isinstance(area_config, list) else [area_config]
-        
-        # Record motion in adjacency tracker for all areas
-        for area_id in area_ids:
-            if self.area_manager.get_area(area_id):
-                self.adjacency_tracker.record_motion(area_id, timestamp)
-
         # Delegate to anomaly detector for checking stuck sensors
         self.anomaly_detector.check_for_stuck_sensors(
             self.sensors, self.area_manager.get_all_areas(), triggered_sensor_id
         )
 
-    def _process_repeated_motion(self, sensor_id: str, timestamp: float) -> None:
-        """Handle repeated motion events from the same sensor."""
-        sensor = self.sensors[sensor_id]
-        area_config = sensor.config.get("area")
-
-        if not area_config:
+    def _record_snapshot(self, sensor_id: str, state: bool, timestamp: float) -> None:
+        """Capture a map snapshot after applying a new sensor state."""
+        if not self.state_recorder:
             return
-            
-        area_ids = area_config if isinstance(area_config, list) else [area_config]
-
-        for area_id in area_ids:
-            if not self.area_manager.get_area(area_id):
-                continue
-
-            # Record motion in the area
-            self.area_manager.record_motion(area_id, timestamp)
-
-            # Update motion in adjacency tracker
-            self.adjacency_tracker.record_motion(area_id, timestamp)
+        self.state_recorder.record_sensor_event(
+            timestamp=timestamp,
+            sensor_id=sensor_id,
+            new_state=state,
+            areas=self.area_manager.get_all_areas(),
+            sensors=self.sensors,
+        )
 
     def _process_motion_event(self, sensor_id: str, timestamp: float) -> None:
         """Process motion sensor activation."""
@@ -177,16 +115,12 @@ class SensorManager:
                 continue
 
             # Record motion in the area
+            was_occupied = area.is_occupied
             area.record_motion(timestamp)
 
-            # Record motion in adjacency tracker
-            self.adjacency_tracker.record_motion(area_id, timestamp)
-
-            # Check for unexpected motion
-            if area.occupancy == 0:
-                # Get current probability to inform decision
-                current_prob = self.area_manager.get_occupancy_probability(area_id)
-                self._handle_unexpected_motion(area, timestamp, current_prob)
+            # If the area was previously empty, treat this as a potential entry
+            if not was_occupied:
+                self._handle_unexpected_motion(area, timestamp)
 
             # Check for simultaneous motion in adjacent areas
             self._check_simultaneous_motion(area_id, timestamp)
@@ -219,21 +153,16 @@ class SensorManager:
         if state:
             _LOGGER.debug(f"Magnetic sensor {sensor_id} opened between {between_areas}")
             for area_id in between_areas:
-                # Update adjacency tracker so subsequent motion in either area 
-                # is considered a valid transition
-                self.adjacency_tracker.record_motion(area_id, timestamp)
-                
-                # Also update area last_motion to keep the area "active" in terms of 
-                # probability decay if it's already occupied
+                # Refresh each area's motion timestamp so decay logic stays accurate
                 area = self.area_manager.get_area(area_id)
-                if area and area.occupancy > 0:
+                if area:
                     area.record_motion(timestamp)
 
-    def _handle_unexpected_motion(self, area: Any, timestamp: float, probability: float = 0.0) -> None:
+    def _handle_unexpected_motion(self, area: Any, timestamp: float) -> None:
         """Handle unexpected motion in an area that should be unoccupied."""
         # Delegate to anomaly detector to evaluate if this is a valid entry or anomaly
         self.anomaly_detector.handle_unexpected_motion(
-            area, self.area_manager.get_all_areas(), self.sensors, timestamp, self.adjacency_tracker
+            area, self.area_manager.get_all_areas(), self.sensors, timestamp
         )
 
         # Always increment occupancy - if valid_entry is True, the person moved from

@@ -7,9 +7,6 @@ from custom_components.occupancy_tracker.helpers.anomaly_detector import (
 )
 from custom_components.occupancy_tracker.helpers.area_state import AreaState
 from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
-from custom_components.occupancy_tracker.helpers.sensor_adjacency_tracker import (
-    SensorAdjacencyTracker,
-)
 
 
 class TestAnomalyDetector:
@@ -175,11 +172,10 @@ class TestAnomalyDetector:
         areas["living_room"].record_motion(timestamp - 10)
 
         sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
 
         # Kitchen has unexpected motion but living room (adjacent) is occupied
         result = detector.handle_unexpected_motion(
-            areas["kitchen"], areas, sensors, timestamp, adjacency_tracker
+            areas["kitchen"], areas, sensors, timestamp
         )
 
         # Should be valid entry (moving from living room to kitchen)
@@ -207,11 +203,10 @@ class TestAnomalyDetector:
         }
 
         sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
 
         # Entry from outside in exit-capable area is valid
         detector.handle_unexpected_motion(
-            areas["front_porch"], areas, sensors, timestamp, adjacency_tracker
+            areas["front_porch"], areas, sensors, timestamp
         )
 
         # Should still not be considered an anomaly (valid external entry)
@@ -235,11 +230,10 @@ class TestAnomalyDetector:
         }
 
         sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
 
         # Bedroom has unexpected motion with no adjacent occupied areas
         detector.handle_unexpected_motion(
-            areas["bedroom"], areas, sensors, timestamp, adjacency_tracker
+            areas["bedroom"], areas, sensors, timestamp
         )
 
         # Should create warning

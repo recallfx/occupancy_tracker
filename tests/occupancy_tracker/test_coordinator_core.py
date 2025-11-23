@@ -71,33 +71,6 @@ class TestOccupancyCoordinatorInit:
         assert coordinator.sensor_manager.sensors["sensor.motion_1"].config["type"] == "motion"
         assert coordinator.sensor_manager.sensors["sensor.door_1"].config["type"] == "magnetic"
 
-    def test_initialize_adjacency(self):
-        """Test adjacency initialization."""
-        hass = Mock(spec=HomeAssistant)
-        config = {
-            "areas": {
-                "living_room": {},
-                "kitchen": {},
-                "hallway": {},
-            },
-            "adjacency": {
-                "living_room": ["kitchen", "hallway"],
-                "kitchen": ["living_room"],
-            },
-            "sensors": {
-                "sensor.motion_living": {"area": "living_room", "type": "motion"},
-                "sensor.motion_kitchen": {"area": "kitchen", "type": "motion"},
-                "sensor.motion_hallway": {"area": "hallway", "type": "motion"},
-            },
-        }
-
-        coordinator = OccupancyCoordinator(hass, config)
-
-        # Living room sensor should know about kitchen and hallway sensors
-        adjacent = coordinator.adjacency_tracker.get_adjacency("sensor.motion_living")
-        assert "sensor.motion_kitchen" in adjacent
-        assert "sensor.motion_hallway" in adjacent
-
 
 class TestOccupancyCoordinatorSensorEvents:
     """Test sensor event processing."""
@@ -237,6 +210,53 @@ class TestOccupancyCoordinatorSensorEvents:
 
         coordinator.process_sensor_event("sensor.motion", False, t1 + 10)
         assert coordinator.sensor_manager.sensors["sensor.motion"].current_state is False
+
+    def test_sensor_event_creates_snapshot(self):
+        """Each sensor transition should append a snapshot to the recorder."""
+        hass = Mock(spec=HomeAssistant)
+        config = {
+            "areas": {"room": {"exit_capable": True}},
+            "adjacency": {},
+            "sensors": {
+                "sensor.motion": {"area": "room", "type": "motion"},
+            },
+        }
+
+        coordinator = OccupancyCoordinator(hass, config)
+        timestamp = time.time()
+
+        coordinator.process_sensor_event("sensor.motion", True, timestamp)
+
+        history = coordinator.state_recorder.get_history()
+        assert len(history) == 1
+        assert history[0].event_type == "sensor"
+        assert history[0].sensors["sensor.motion"]["state"] is True
+
+    def test_tick_snapshot_after_interval(self):
+        """Periodic tick snapshots should be created after inactivity."""
+        hass = Mock(spec=HomeAssistant)
+        config = {
+            "areas": {"room": {"exit_capable": True}},
+            "adjacency": {},
+            "sensors": {
+                "sensor.motion": {"area": "room", "type": "motion"},
+            },
+        }
+
+        coordinator = OccupancyCoordinator(hass, config)
+        timestamp = time.time()
+
+        coordinator.process_sensor_event("sensor.motion", True, timestamp)
+
+        # First timeout check occurs inside tick interval, so no new snapshot
+        coordinator.check_timeouts(timestamp + 120)
+        assert len(coordinator.state_recorder.get_history()) == 1
+
+        # After enough time without events, a tick snapshot should be recorded
+        coordinator.check_timeouts(timestamp + 400)
+        history = coordinator.state_recorder.get_history()
+        assert len(history) == 2
+        assert history[-1].event_type == "tick"
 
 
 class TestOccupancyCoordinatorTransitions:

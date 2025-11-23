@@ -9,9 +9,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN
 from .helpers.types import OccupancyTrackerConfig
-from .helpers.sensor_adjacency_tracker import SensorAdjacencyTracker
 from .helpers.anomaly_detector import AnomalyDetector
 from .helpers.warning import Warning
+from .helpers.map_state_recorder import MapStateRecorder
 from .area_manager import AreaManager
 from .sensor_manager import SensorManager
 from .diagnostics import OccupancyDiagnostics
@@ -33,16 +33,16 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.last_event_time = time.time()
         
         # Initialize helpers
-        self.adjacency_tracker = SensorAdjacencyTracker()
         self.anomaly_detector = AnomalyDetector(config)
+        self.state_recorder = MapStateRecorder()
         
         # Initialize managers
         self.area_manager = AreaManager(config)
         self.sensor_manager = SensorManager(
             config, 
             self.area_manager, 
-            self.adjacency_tracker, 
-            self.anomaly_detector
+            self.anomaly_detector,
+            state_recorder=self.state_recorder,
         )
         
         # Initialize diagnostics
@@ -73,6 +73,11 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if timestamp is None:
             timestamp = time.time()
         self.anomaly_detector.check_timeouts(self.area_manager.get_all_areas(), timestamp)
+        self.state_recorder.maybe_record_tick(
+            timestamp,
+            self.area_manager.get_all_areas(),
+            self.sensor_manager.sensors,
+        )
         # Always update data to reflect probability decay
         self.async_set_updated_data(self.diagnostics.get_system_status())
 
@@ -110,14 +115,11 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.area_manager.reset()
         self.sensor_manager.reset()
         
-        # Reset adjacency tracker
-        self.adjacency_tracker = SensorAdjacencyTracker()
-        self.sensor_manager.adjacency_tracker = self.adjacency_tracker
-        self.sensor_manager._initialize_adjacency()
-
         # Create new anomaly detector
         self.anomaly_detector = AnomalyDetector(self.config)
         self.sensor_manager.anomaly_detector = self.anomaly_detector
+        self.state_recorder.reset()
+        self.sensor_manager.state_recorder = self.state_recorder
 
         _LOGGER.info("Occupancy tracker system reset")
         self.async_set_updated_data(self.diagnostics.get_system_status())

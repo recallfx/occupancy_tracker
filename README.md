@@ -160,12 +160,6 @@ Responsible for detecting unusual patterns:
 - Suspicious transitions
 - Simultaneous multi-area motion
 
-### SensorAdjacencyTracker
-Manages relationships between sensors and areas:
-- Tracks motion across adjacent areas
-- Validates transitions based on adjacency map
-- Records motion history for anomaly detection
-
 ## Handling Special Cases
 
 ### Sleep Scenarios
@@ -195,7 +189,7 @@ The project includes comprehensive test suites organized into two categories:
 
 Test individual components in isolation:
 - **Core Components**: `test_coordinator_core.py`, `test_coordinator_diagnostics.py`, `test_coordinator_warnings_reset.py`
-- **Helpers**: `test_anomaly_detector.py`, `test_area_state.py`, `test_sensor_adjacency_tracker.py`, `test_sensor_state.py`, `test_warning.py`
+- **Helpers**: `test_anomaly_detector.py`, `test_area_state.py`, `test_sensor_state.py`, `test_warning.py`
 - **Entities**: `test_sensor.py`, `test_button.py`
 - **System**: `test_init.py`, `test_exit_capable.py`, `test_probability.py`
 

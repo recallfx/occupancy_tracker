@@ -7,7 +7,6 @@ This Home Assistant integration tracks occupancy across areas using a coordinato
 - `OccupancyCoordinator` (`coordinator.py`): The central hub that manages the system state, coordinates updates, and interfaces with Home Assistant. It uses `DataUpdateCoordinator` but triggers updates manually via `async_set_updated_data` when events occur.
 - `AreaManager` (`area_manager.py`): Manages the state of individual areas (occupancy count, last motion, etc.).
 - `SensorManager` (`sensor_manager.py`): Handles sensor state changes, maintains sensor history, and updates the `AreaManager`.
-- `SensorAdjacencyTracker` (`helpers/sensor_adjacency_tracker.py`): Tracks transitions between sensors to infer movement between areas.
 - `AnomalyDetector` (`helpers/anomaly_detector.py`): Monitors for anomalies like sensors getting stuck or inconsistent states.
 
 The system is initialized in `__init__.py` via `async_setup`, which reads the YAML configuration and creates the `OccupancyCoordinator`.

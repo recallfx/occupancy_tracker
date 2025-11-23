@@ -80,7 +80,6 @@ class AnomalyDetector:
         areas: Dict[str, AreaState],
         sensors: Dict[str, SensorState],
         timestamp: float,
-        adjacency_tracker,
     ) -> bool:
         """Handle unexpected motion in an area that should be unoccupied.
 
@@ -116,20 +115,6 @@ class AnomalyDetector:
                         valid_entry = True
                         logger.info(f"Person moved from {adjacent_area_id} to {area.id} (sleep/inactive)")
                         adjacent_area.record_exit(timestamp)
-                        break
-
-        # Check if there was recent motion in adjacent areas using adjacency tracker
-        if not valid_entry:
-            for sensor_id, sensor in sensors.items():
-                if sensor.config.get("area") == area.id:
-                    # Check if this sensor had adjacent motion recently
-                    if adjacency_tracker.check_adjacent_motion(
-                        sensor_id, timestamp, timeframe=60
-                    ):
-                        valid_entry = True
-                        logger.info(
-                            f"Motion in {area.id} linked to recent adjacent motion"
-                        )
                         break
 
         if not valid_entry:

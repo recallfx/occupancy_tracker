@@ -47,3 +47,8 @@ class AreaState:
         if self.last_motion == 0:  # No motion ever recorded
             return False
         return (timestamp - self.last_motion) <= within_seconds
+
+    @property
+    def is_occupied(self) -> bool:
+        """Whether this area currently has one or more occupants."""
+        return self.occupancy > 0
