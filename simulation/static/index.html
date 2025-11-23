@@ -4,54 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Occupancy Tracker Simulation</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
     <header>
         <div class="header-left">
-            <button id="sidebarToggle" class="icon-button" aria-label="Toggle sidebar">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
             <h1>Occupancy Tracker Simulation</h1>
         </div>
         <div class="header-right">
+            <select id="automationSelect" style="margin-right: 10px; padding: 5px;">
+                <option value="">Select Scenario...</option>
+                <option value="scenario1">Scenario 1: Bedroom Loop</option>
+                <option value="scenario2">Scenario 2: Bathroom Stay</option>
+            </select>
+            <button id="resetWarningsButton" class="ghost-button" disabled style="margin-right: 10px;">Reset Warnings</button>
             <div id="connectionStatus" class="status-badge">Connecting...</div>
         </div>
     </header>
-
-    <aside>
-        <div>
-            <div class="section-title">System Status</div>
-            <div class="stat-row">
-                <span>Total Occupancy</span>
-                <span id="totalOccupancy" style="color: var(--text-primary); font-weight: bold;">0</span>
-            </div>
-            <div class="stat-row">
-                <span>Active Warnings</span>
-                <span id="activeWarningsCount" style="color: var(--text-primary); font-weight: bold;">0</span>
-            </div>
-        </div>
-
-        <div>
-            <div class="section-title with-action">
-                <span>Active Warnings</span>
-                <button id="resetWarningsButton" class="ghost-button" disabled>Reset</button>
-            </div>
-            <div id="warningsList" class="warning-list">
-                <!-- Warnings injected here -->
-                <div style="color: var(--text-secondary); font-size: 0.8rem; font-style: italic;">No active warnings</div>
-            </div>
-        </div>
-
-        <div>
-            <div class="section-title">Sensors</div>
-            <div id="sensorsList" class="sensor-list">
-                <!-- Sensors injected here -->
-            </div>
-        </div>
-    </aside>
 
     <main>
         <div class="legend">
@@ -62,12 +32,7 @@
         </div>
 
         <div class="canvas-container">
-            <canvas id="simCanvas" width="800" height="600"></canvas>
-        </div>
-
-        <div class="section-title" style="margin-top: 20px;">Area States</div>
-        <div id="areasGrid" class="areas-grid">
-            <!-- Area cards injected here -->
+            <div id="sim-container"></div>
         </div>
     </main>
 

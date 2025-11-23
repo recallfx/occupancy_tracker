@@ -1,107 +1,79 @@
-export function setupInput(canvas, person, layout, activeSensors, sendEventCallback, renderCallback) {
-    function getScale() {
-        const baseWidth = layout?.dimensions?.width || canvas.width;
-        const baseHeight = layout?.dimensions?.height || canvas.height;
-        return {
-            x: canvas.width / baseWidth,
-            y: canvas.height / baseHeight
-        };
-    }
+const d3 = window.d3;
 
-    function clampToCanvas(x, y) {
-        const clampedX = Math.min(Math.max(person.radius, x), canvas.width - person.radius);
-        const clampedY = Math.min(Math.max(person.radius, y), canvas.height - person.radius);
-        return { x: clampedX, y: clampedY };
-    }
-
-    function pointerPosition(clientX, clientY) {
-        const rect = canvas.getBoundingClientRect();
-        return {
-            x: clientX - rect.left,
-            y: clientY - rect.top
-        };
-    }
+export function createInputSystem(persons, layout, activeSensors, sendEventCallback, renderCallback) {
+    
+    const sensorTimeouts = new Map();
 
     function checkSensors() {
-        const { x: scaleX, y: scaleY } = getScale();
         layout.sensors.forEach(sensor => {
-            const sensorX = sensor.x * scaleX;
-            const sensorY = sensor.y * scaleY;
-            const dx = person.x - sensorX;
-            const dy = person.y - sensorY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+            let isOverlapping = false;
+            for (const p of persons) {
+                const dx = p.x - sensor.x;
+                const dy = p.y - sensor.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // Sensor radius 10 + Person radius 15 = 25
+                if (dist < 25) {
+                    isOverlapping = true;
+                    break;
+                }
+            }
             
-            // Sensor radius 10 + Person radius 15 = 25
-            const isOverlapping = dist < 25;
-            
-            if (isOverlapping && !activeSensors.has(sensor.id)) {
-                activeSensors.add(sensor.id);
-                sendEventCallback(sensor.id, true);
-            } else if (!isOverlapping && activeSensors.has(sensor.id)) {
-                activeSensors.delete(sensor.id);
-                sendEventCallback(sensor.id, false);
+            if (isOverlapping) {
+                // Motion detected: Cancel any pending off-timer
+                if (sensorTimeouts.has(sensor.id)) {
+                    clearTimeout(sensorTimeouts.get(sensor.id));
+                    sensorTimeouts.delete(sensor.id);
+                    // Re-trigger event to notify backend of re-entry/continued motion
+                    sendEventCallback(sensor.id, true);
+                }
+
+                // Turn on immediately if not already on
+                if (!activeSensors.has(sensor.id)) {
+                    activeSensors.add(sensor.id);
+                    sendEventCallback(sensor.id, true);
+                }
+            } else {
+                // No motion/contact
+                if (activeSensors.has(sensor.id)) {
+                    if (sensor.type === 'magnetic') {
+                        // Magnetic sensors turn off immediately
+                        activeSensors.delete(sensor.id);
+                        sendEventCallback(sensor.id, false);
+                    } else if (!sensorTimeouts.has(sensor.id)) {
+                        // Motion sensors have a cooldown
+                        const timeoutId = setTimeout(() => {
+                            activeSensors.delete(sensor.id);
+                            sendEventCallback(sensor.id, false);
+                            sensorTimeouts.delete(sensor.id);
+                            renderCallback(); // Update UI when sensor turns off
+                        }, 1500);
+                        sensorTimeouts.set(sensor.id, timeoutId);
+                    }
+                }
             }
         });
     }
 
-    function startInteraction(x, y) {
-        const { x: px, y: py } = clampToCanvas(x, y);
-        const dx = px - person.x;
-        const dy = py - person.y;
-        if (Math.sqrt(dx * dx + dy * dy) < person.radius) {
-            person.dragging = true;
-        } else {
-            person.x = px;
-            person.y = py;
+    const drag = d3.drag()
+        .on("start", (event, d) => {
+            d.dragging = true;
+            d3.select(event.sourceEvent.target).attr("cursor", "grabbing");
+        })
+        .on("drag", (event, d) => {
+            const width = layout.dimensions?.width || 800;
+            const height = layout.dimensions?.height || 600;
+            
+            d.x = Math.max(d.radius, Math.min(width - d.radius, event.x));
+            d.y = Math.max(d.radius, Math.min(height - d.radius, event.y));
+            
             checkSensors();
             renderCallback();
-        }
-    }
+        })
+        .on("end", (event, d) => {
+            d.dragging = false;
+            d3.select(event.sourceEvent.target).attr("cursor", "grab");
+        });
 
-    function dragInteraction(x, y) {
-        if (!person.dragging) return;
-        const { x: px, y: py } = clampToCanvas(x, y);
-        person.x = px;
-        person.y = py;
-        checkSensors();
-        renderCallback();
-    }
-
-    function endInteraction() {
-        person.dragging = false;
-    }
-
-    // Mouse Events
-    canvas.addEventListener('mousedown', (e) => {
-        const { x, y } = pointerPosition(e.clientX, e.clientY);
-        startInteraction(x, y);
-    });
-
-    canvas.addEventListener('mousemove', (e) => {
-        const { x, y } = pointerPosition(e.clientX, e.clientY);
-        dragInteraction(x, y);
-    });
-
-    canvas.addEventListener('mouseup', endInteraction);
-    canvas.addEventListener('mouseleave', endInteraction);
-
-    // Touch Events
-    canvas.addEventListener('touchstart', (e) => {
-        if (!e.touches.length) return;
-        const touch = e.touches[0];
-        const { x, y } = pointerPosition(touch.clientX, touch.clientY);
-        startInteraction(x, y);
-        e.preventDefault();
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', (e) => {
-        if (!e.touches.length) return;
-        const touch = e.touches[0];
-        const { x, y } = pointerPosition(touch.clientX, touch.clientY);
-        dragInteraction(x, y);
-        e.preventDefault();
-    }, { passive: false });
-
-    canvas.addEventListener('touchend', endInteraction);
-    canvas.addEventListener('touchcancel', endInteraction);
+    return { drag, checkSensors };
 }

@@ -92,7 +92,8 @@ async def periodic_check(app):
             coordinator.check_timeouts(time.time())
     except asyncio.CancelledError:
         _LOGGER.debug("Periodic check task cancelled")
-        raise
+        # Don't re-raise, just exit cleanly
+        return
 
 async def start_background_tasks(app):
     app["periodic_task"] = asyncio.create_task(periodic_check(app))

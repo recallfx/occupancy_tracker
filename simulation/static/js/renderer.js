@@ -1,232 +1,415 @@
 import { formatTime } from './utils.js';
 
-export function render(ctx, layout, state, person, activeSensors, elements) {
-    drawMap(ctx, layout, state, person, activeSensors);
-    renderAreas(layout, state, elements.areasGrid);
-    renderSensors(state, elements.sensorsList);
-    renderWarnings(state, elements.warningsList);
-    updateSystemStats(state, elements);
-}
+const d3 = window.d3;
 
-function updateSystemStats(state, elements) {
-    let total = 0;
-    for (const area of Object.values(state.areas)) {
-        total += area.occupancy;
+export function render(containerId, layout, state, persons, activeSensors, elements, dragBehavior) {
+    const container = d3.select(containerId);
+    const width = layout.dimensions?.width || 800;
+    const height = layout.dimensions?.height || 600;
+
+    let svg = container.select('svg');
+    if (svg.empty()) {
+        svg = container.append('svg')
+            .attr('viewBox', `0 0 ${width} ${height}`)
+            .attr('preserveAspectRatio', 'xMidYMid meet')
+            .style('width', '100%')
+            .style('height', '100%')
+            .style('background', 'white')
+            .style('display', 'block');
+            
+        svg.append('g').attr('class', 'areas-layer');
+        svg.append('g').attr('class', 'connections-layer');
+        svg.append('g').attr('class', 'sensors-layer');
+        svg.append('g').attr('class', 'person-layer');
+        svg.append('g').attr('class', 'hud-layer');
+        svg.append('g').attr('class', 'warnings-layer');
+    } else {
+        svg.attr('viewBox', `0 0 ${width} ${height}`);
     }
-    elements.totalOccupancy.textContent = total;
-    elements.activeWarningsCount.textContent = state.warnings.length;
+
+    drawMap(svg, layout, state, persons, activeSensors, dragBehavior);
+    drawHUD(svg, state, width, height);
+    drawWarningsOverlay(svg, state, width, height);
 }
 
-function renderAreas(layout, state, container) {
-    container.innerHTML = '';
+function drawHUD(svg, state, width, height) {
+    const hudLayer = svg.select('.hud-layer');
     
-    // Sort areas by ID for stability
-    const sortedAreaIds = Object.keys(state.areas).sort();
+    // Calculate stats
+    let totalOccupancy = 0;
+    for (const area of Object.values(state.areas)) {
+        totalOccupancy += area.occupancy;
+    }
+    const activeWarnings = state.warnings.length;
 
-    sortedAreaIds.forEach(areaId => {
-        const areaData = state.areas[areaId];
-        // layout.areas might not have all areas if config changed, fallback safely
-        const areaConfig = layout.areas.find(a => a.id === areaId) || { name: areaId };
-        
-        const card = document.createElement('div');
-        card.className = `area-card ${areaData.occupancy > 0 ? 'occupied' : ''}`;
-        
-        const probPercent = Math.round(areaData.probability * 100);
-        
-        card.innerHTML = `
-            <div class="area-header">
-                <span class="area-name">${areaId}</span>
-                <span class="occupancy-count">${areaData.occupancy}</span>
-            </div>
-            <div class="stat-row">
-                <span>Last Motion</span>
-                <span>${formatTime(areaData.time_since_motion)}</span>
-            </div>
-            <div class="stat-row">
-                <span>Probability</span>
-                <span>${probPercent}%</span>
-            </div>
-            <div class="prob-bar-bg">
-                <div class="prob-bar-fill" style="width: ${probPercent}%"></div>
-            </div>
-        `;
-        container.appendChild(card);
-    });
-}
+    // Background for HUD
+    let bg = hudLayer.select('.hud-bg');
+    if (bg.empty()) {
+        bg = hudLayer.append('rect')
+            .attr('class', 'hud-bg')
+            .attr('rx', 5)
+            .attr('ry', 5)
+            .attr('fill', 'rgba(255, 255, 255, 0.85)')
+            .attr('stroke', '#ccc')
+            .attr('stroke-width', 1);
+    }
 
-function renderSensors(state, container) {
-    container.innerHTML = '';
+    const hudWidth = 180;
+    const hudHeight = 55;
+    const margin = 10;
+    const xPos = width - hudWidth - margin;
+    const yPos = margin;
+
+    bg.attr('x', xPos)
+      .attr('y', yPos)
+      .attr('width', hudWidth)
+      .attr('height', hudHeight);
+
+    const hudData = [
+        { label: 'Total Occupancy:', value: totalOccupancy, x: xPos + 10, y: yPos + 20 },
+        { label: 'Active Warnings:', value: activeWarnings, x: xPos + 10, y: yPos + 40, alert: activeWarnings > 0 }
+    ];
+
+    const hudGroup = hudLayer.selectAll('.hud-stats').data([0]);
+    const hudGroupEnter = hudGroup.enter().append('g').attr('class', 'hud-stats');
     
-    // Sort sensors
-    const sortedSensorIds = Object.keys(state.sensors).sort();
+    // We just redraw the text content
+    const texts = hudLayer.selectAll('.hud-text')
+        .data(hudData);
 
-    sortedSensorIds.forEach(sensorId => {
-        const sensorData = state.sensors[sensorId];
-        const shortName = sensorId.replace('motion_', '').replace('magnetic_', '').replace('person_', '');
-        
-        const item = document.createElement('div');
-        item.className = `sensor-item ${sensorData.state ? 'active' : ''}`;
-        
-        item.innerHTML = `
-            <div>
-                <div class="sensor-name">${shortName}</div>
-                <div class="sensor-meta">${sensorData.type}</div>
-            </div>
-            <div style="text-align: right">
-                <div style="color: ${sensorData.state ? 'var(--secondary-color)' : 'var(--text-secondary)'}">
-                    ${sensorData.state ? 'ON' : 'OFF'}
-                </div>
-                <div class="sensor-meta">${formatTime(sensorData.time_since_change)}</div>
-            </div>
-        `;
-        container.appendChild(item);
-    });
+    texts.enter().append('text')
+        .attr('class', 'hud-text')
+        .attr('font-family', 'Arial')
+        .attr('font-size', '14px')
+        .attr('font-weight', 'bold')
+        .merge(texts)
+        .attr('x', d => d.x)
+        .attr('y', d => d.y)
+        .attr('fill', d => d.alert ? 'red' : 'black')
+        .text(d => `${d.label} ${d.value}`);
+
+    texts.exit().remove();
 }
 
-function renderWarnings(state, container) {
-    container.innerHTML = '';
+function drawWarningsOverlay(svg, state, width, height) {
+    const warningsLayer = svg.select('.warnings-layer');
     
     if (state.warnings.length === 0) {
-        container.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.8rem; font-style: italic;">No active warnings</div>';
+        warningsLayer.selectAll('*').remove();
         return;
     }
 
-    state.warnings.forEach(w => {
-        const item = document.createElement('div');
-        item.className = 'warning-item';
-        const warningId = w.id || w.warning_id || '';
-        item.innerHTML = `
-            <div style="font-weight: bold; color: var(--error-color)">${w.type}</div>
-            <div>${w.message}</div>
-            <div class="sensor-meta">Area: ${w.area_id || 'N/A'}</div>
-            <div class="warning-actions">
-                <button class="ghost-button resolve-warning" data-warning-id="${warningId}">
-                    Resolve
-                </button>
-            </div>
-        `;
-        container.appendChild(item);
-    });
+    // Draw a semi-transparent box at the bottom right or top right for warnings
+    const boxWidth = 300;
+    const boxHeight = state.warnings.length * 20 + 30;
+    const x = width - boxWidth - 10;
+    const y = 75; // Below the HUD (55 height + 10 margin + 10 spacing)
+
+    let bg = warningsLayer.select('.warnings-bg');
+    if (bg.empty()) {
+        bg = warningsLayer.append('rect')
+            .attr('class', 'warnings-bg')
+            .attr('rx', 5)
+            .attr('ry', 5)
+            .attr('fill', 'rgba(255, 255, 255, 0.9)')
+            .attr('stroke', 'red')
+            .attr('stroke-width', 1);
+    }
+    
+    bg.attr('x', x)
+      .attr('y', y)
+      .attr('width', boxWidth)
+      .attr('height', boxHeight);
+
+    const title = warningsLayer.selectAll('.warnings-title').data([0]);
+    title.enter().append('text')
+        .attr('class', 'warnings-title')
+        .attr('font-family', 'Arial')
+        .attr('font-size', '12px')
+        .attr('font-weight', 'bold')
+        .attr('fill', 'red')
+        .merge(title)
+        .attr('x', x + 10)
+        .attr('y', y + 20)
+        .text('Active Warnings:');
+
+    const warningTexts = warningsLayer.selectAll('.warning-text')
+        .data(state.warnings);
+
+    warningTexts.enter().append('text')
+        .attr('class', 'warning-text')
+        .attr('font-family', 'Arial')
+        .attr('font-size', '10px')
+        .merge(warningTexts)
+        .attr('x', x + 10)
+        .attr('y', (d, i) => y + 40 + (i * 15))
+        .attr('fill', '#333')
+        .text(d => `${d.type}: ${d.message} (${d.area_id || 'Global'})`);
+
+    warningTexts.exit().remove();
 }
 
-function getScale(ctx, layout) {
-    const baseWidth = layout?.dimensions?.width || ctx.canvas.width || 1;
-    const baseHeight = layout?.dimensions?.height || ctx.canvas.height || 1;
-    return {
-        x: ctx.canvas.width / baseWidth,
-        y: ctx.canvas.height / baseHeight
-    };
-}
+function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
+    // Areas
+    const areasLayer = svg.select('.areas-layer');
+    const areas = areasLayer.selectAll('.area')
+        .data(layout.areas, d => d.id);
 
-function drawMap(ctx, layout, state, person, activeSensors) {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    const scale = getScale(ctx, layout);
+    const areasEnter = areas.enter().append('g')
+        .attr('class', 'area');
+    
+    areasEnter.append('rect');
+    areasEnter.append('text');
+
+    const areasMerge = areasEnter.merge(areas);
+
+    // Color scale for occupancy probability/density
+    // We can use d3.interpolateReds
+    const colorScale = d3.scaleSequential(d3.interpolateReds).domain([0, 1]);
+
+    areasMerge.select('rect')
+        .attr('x', d => d.x)
+        .attr('y', d => d.y)
+        .attr('width', d => d.w)
+        .attr('height', d => d.h)
+        .attr('fill', d => {
+            const areaState = state.areas && state.areas[d.id];
+            if (!areaState) return d.color || '#eee';
+            
+            // If occupied, use a distinct color or high intensity
+            if (areaState.occupancy > 0) {
+                // A solid color for confirmed occupancy
+                return '#ffcdd2'; 
+            }
+            
+            // If not occupied but has probability, use the scale
+            if (areaState.probability > 0) {
+                return colorScale(areaState.probability);
+            }
+            
+            return d.color || '#f5f5f5';
+        })
+        .attr('stroke', d => {
+            const areaState = state.areas && state.areas[d.id];
+            return (areaState && areaState.occupancy > 0) ? '#cf6679' : '#999';
+        })
+        .attr('stroke-width', d => {
+            const areaState = state.areas && state.areas[d.id];
+            return (areaState && areaState.occupancy > 0) ? 3 : 1;
+        });
+
+    const areaText = areasMerge.select('text')
+        .attr('x', d => d.x + 5)
+        .attr('y', d => d.y + 20)
+        .attr('font-family', 'Arial')
+        .attr('font-size', '12px')
+        .attr('fill', 'black')
+        .style('paint-order', 'stroke')
+        .style('stroke', 'white')
+        .style('stroke-width', '3px')
+        .style('stroke-linecap', 'butt')
+        .style('stroke-linejoin', 'miter');
+    
+    // Clear existing tspans to redraw
+    areaText.text(null);
+    
+    // Area ID
+    areaText.append('tspan')
+        .attr('x', d => d.x + 5)
+        .attr('dy', 0)
+        .attr('font-weight', 'bold')
+        .text(d => d.id);
+
+    // Occupancy
+    areaText.append('tspan')
+        .attr('x', d => d.x + 5)
+        .attr('dy', '1.2em')
+        .attr('font-size', '11px')
+        .text(d => {
+            const areaState = state.areas && state.areas[d.id];
+            return areaState ? `Occ: ${areaState.occupancy}` : '';
+        });
+
+    // Probability
+    areaText.append('tspan')
+        .attr('x', d => d.x + 5)
+        .attr('dy', '1.1em')
+        .attr('font-size', '10px')
+        .attr('fill', '#555')
+        .text(d => {
+            const areaState = state.areas && state.areas[d.id];
+            if (!areaState) return '';
+            const prob = Math.round(areaState.probability * 100);
+            return `Prob: ${prob}%`;
+        });
+        
+    // Last Motion
+    areaText.append('tspan')
+        .attr('x', d => d.x + 5)
+        .attr('dy', '1.1em')
+        .attr('font-size', '10px')
+        .attr('fill', '#555')
+        .text(d => {
+            const areaState = state.areas && state.areas[d.id];
+            if (!areaState) return '';
+            return `Last: ${formatTime(areaState.time_since_motion)}`;
+        });
+
+    areas.exit().remove();
+
+    // Connections
     const areaCenters = new Map();
-
-    // Draw Areas
     layout.areas.forEach(area => {
-        // Check occupancy state
-        const areaState = state.areas && state.areas[area.id];
-        
-        if (areaState && areaState.occupancy > 0) {
-            ctx.fillStyle = '#ffcdd2'; // Red tint for occupied
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = '#cf6679';
-        } else {
-            ctx.fillStyle = area.color;
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = '#999';
-        }
-
-        const x = area.x * scale.x;
-        const y = area.y * scale.y;
-        const width = area.w * scale.x;
-        const height = area.h * scale.y;
-
-        ctx.fillRect(x, y, width, height);
-        ctx.strokeRect(x, y, width, height);
-        
-        ctx.fillStyle = 'black';
-        ctx.font = '12px Arial';
-        ctx.fillText(area.id, x + 5, y + 20);
-
         areaCenters.set(area.id, {
-            x: x + width / 2,
-            y: y + height / 2
+            x: area.x + area.w / 2,
+            y: area.y + area.h / 2
         });
     });
 
-    drawConnections(ctx, layout.connections || [], areaCenters);
+    const connectionsLayer = svg.select('.connections-layer');
+    const connections = connectionsLayer.selectAll('.connection')
+        .data((layout.connections || []).filter(d => areaCenters.has(d.source) && areaCenters.has(d.target)));
 
-    // Draw Sensors
-    layout.sensors.forEach(sensor => {
-        const sensorX = sensor.x * scale.x;
-        const sensorY = sensor.y * scale.y;
-        ctx.beginPath();
-        ctx.arc(sensorX, sensorY, 10, 0, Math.PI * 2);
-        
-        let color = 'gray';
-        if (sensor.type === 'motion') color = 'blue';
-        if (sensor.type === 'magnetic') color = 'green';
-        if (sensor.type.includes('camera')) color = 'purple';
-        
-        // Highlight if active (person is on it)
-        // Use the server state for visualization if available, otherwise local interaction
-        const sensorState = state.sensors && state.sensors[sensor.id];
-        const isActive = sensorState ? sensorState.state : activeSensors.has(sensor.id);
+    connections.enter().append('line')
+        .attr('class', 'connection')
+        .attr('stroke', 'rgba(0, 0, 0, 0.45)')
+        .attr('stroke-width', 2)
+        .attr('stroke-dasharray', '8, 6')
+        .attr('stroke-linecap', 'round')
+        .merge(connections)
+        .attr('x1', d => areaCenters.get(d.source)?.x || 0)
+        .attr('y1', d => areaCenters.get(d.source)?.y || 0)
+        .attr('x2', d => areaCenters.get(d.target)?.x || 0)
+        .attr('y2', d => areaCenters.get(d.target)?.y || 0);
 
-        if (isActive) {
-            ctx.fillStyle = 'yellow';
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 3;
-        } else {
-            ctx.fillStyle = color;
-            ctx.strokeStyle = 'black';
-            ctx.lineWidth = 1;
+    connections.exit().remove();
+
+    // Sensors
+    const sensorsLayer = svg.select('.sensors-layer');
+    const sensors = sensorsLayer.selectAll('.sensor')
+        .data(layout.sensors, d => d.id);
+
+    const sensorsEnter = sensors.enter().append('g')
+        .attr('class', 'sensor');
+    
+    sensorsEnter.append('circle')
+        .attr('r', 10);
+    
+    sensorsEnter.append('text')
+        .attr('class', 'sensor-name')
+        .attr('text-anchor', 'end')
+        .attr('font-family', 'Arial')
+        .attr('font-size', '10px')
+        .attr('fill', 'black')
+        .style('paint-order', 'stroke')
+        .style('stroke', 'white')
+        .style('stroke-width', '3px')
+        .style('stroke-linecap', 'butt')
+        .style('stroke-linejoin', 'miter');
+
+    sensorsEnter.append('text')
+        .attr('class', 'sensor-state')
+        .attr('text-anchor', 'start')
+        .attr('font-family', 'Arial')
+        .attr('font-size', '9px')
+        .style('paint-order', 'stroke')
+        .style('stroke', 'white')
+        .style('stroke-width', '3px')
+        .style('stroke-linecap', 'butt')
+        .style('stroke-linejoin', 'miter');
+
+    const sensorsMerge = sensorsEnter.merge(sensors);
+
+    // Patch existing nodes
+    sensorsMerge.select('text').attr('class', 'sensor-name')
+        .style('paint-order', 'stroke')
+        .style('stroke', 'white')
+        .style('stroke-width', '3px')
+        .style('stroke-linecap', 'butt')
+        .style('stroke-linejoin', 'miter');
+
+    sensorsMerge.each(function() {
+        if (d3.select(this).select('.sensor-state').empty()) {
+             d3.select(this).append('text')
+                .attr('class', 'sensor-state')
+                .attr('text-anchor', 'start')
+                .attr('font-family', 'Arial')
+                .attr('font-size', '9px')
+                .style('paint-order', 'stroke')
+                .style('stroke', 'white')
+                .style('stroke-width', '3px')
+                .style('stroke-linecap', 'butt')
+                .style('stroke-linejoin', 'miter');
         }
-        
-        ctx.fill();
-        ctx.stroke();
-        
-        ctx.fillStyle = 'black';
-        ctx.font = '10px Arial';
-        ctx.fillText(
-            sensor.id.replace('motion_', '').replace('magnetic_', '').replace('person_', ''),
-            sensorX - 10,
-            sensorY - 15
-        );
     });
 
-    // Draw Person
-    ctx.beginPath();
-    ctx.arc(person.x, person.y, person.radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
-    ctx.fill();
-    ctx.strokeStyle = 'black';
-    ctx.stroke();
-}
+    sensorsMerge.attr('transform', d => `translate(${d.x}, ${d.y})`);
 
-function drawConnections(ctx, connections, areaCenters) {
-    if (!connections.length) {
-        return;
-    }
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 6]);
-    ctx.lineCap = 'round';
+    sensorsMerge.select('circle')
+        .attr('fill', d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            const isActive = sensorState ? sensorState.state : activeSensors.has(d.id);
+            if (isActive) return 'yellow';
+            if (d.type === 'motion') return 'blue';
+            if (d.type === 'magnetic') return 'green';
+            if (d.type.includes('camera')) return 'purple';
+            return 'gray';
+        })
+        .attr('stroke', d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            const isActive = sensorState ? sensorState.state : activeSensors.has(d.id);
+            if (isActive) {
+                if (d.type === 'motion') return 'blue';
+                if (d.type === 'magnetic') return 'green';
+                if (d.type.includes('camera')) return 'purple';
+            }
+            return 'black';
+        })
+        .attr('stroke-width', d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            const isActive = sensorState ? sensorState.state : activeSensors.has(d.id);
+            return isActive ? 3 : 1;
+        });
 
-    connections.forEach(({ source, target }) => {
-        const start = areaCenters.get(source);
-        const end = areaCenters.get(target);
-        if (!start || !end) {
-            return;
-        }
-        ctx.beginPath();
-        ctx.moveTo(start.x, start.y);
-        ctx.lineTo(end.x, end.y);
-        ctx.stroke();
-    });
+    sensorsMerge.select('.sensor-name')
+        .attr('x', -12)
+        .attr('y', -5)
+        .text(d => d.id.replace('motion_', '').replace('magnetic_', '').replace('person_', ''));
 
-    ctx.restore();
+    sensorsMerge.select('.sensor-state')
+        .attr('x', 12)
+        .attr('y', 4)
+        .text(d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            if (!sensorState) return '';
+            return sensorState.state ? 'ON' : 'OFF';
+        })
+        .attr('fill', d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            return (sensorState && sensorState.state) ? 'black' : '#999';
+        })
+        .attr('font-weight', d => {
+            const sensorState = state.sensors && state.sensors[d.id];
+            return (sensorState && sensorState.state) ? 'bold' : 'normal';
+        });
+
+    sensors.exit().remove();
+
+    // Person
+    const personLayer = svg.select('.person-layer');
+    const personNode = personLayer.selectAll('.person')
+        .data(persons, d => d.id);
+
+    personNode.enter().append('circle')
+        .attr('class', 'person')
+        .attr('r', d => d.radius)
+        .attr('fill', 'rgba(255, 0, 0, 0.7)')
+        .attr('stroke', 'black')
+        .attr('cursor', 'grab')
+        .call(dragBehavior)
+        .merge(personNode)
+        .attr('cx', d => d.x)
+        .attr('cy', d => d.y);
+        
+    personNode.exit().remove();
 }

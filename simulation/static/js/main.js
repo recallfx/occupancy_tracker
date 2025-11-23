@@ -1,28 +1,27 @@
 import { render } from './renderer.js';
-import { setupInput } from './input.js';
+import { createInputSystem } from './input.js';
+import { runAutomation } from './automation.js';
 
 // DOM Elements
 const elements = {
-    canvas: document.getElementById('simCanvas'),
+    container: '#sim-container',
     statusBadge: document.getElementById('connectionStatus'),
-    areasGrid: document.getElementById('areasGrid'),
-    sensorsList: document.getElementById('sensorsList'),
-    warningsList: document.getElementById('warningsList'),
-    totalOccupancy: document.getElementById('totalOccupancy'),
-    activeWarningsCount: document.getElementById('activeWarningsCount'),
     resetWarningsButton: document.getElementById('resetWarningsButton'),
-    sidebarToggle: document.getElementById('sidebarToggle')
+    automationSelect: document.getElementById('automationSelect')
 };
 
 const DEFAULT_DIMENSIONS = { width: 600, height: 500 };
-const ctx = elements.canvas.getContext('2d');
 
 // State
 let layout = { areas: [], sensors: [], connections: [], dimensions: { ...DEFAULT_DIMENSIONS } };
 let state = { areas: {}, sensors: {}, warnings: [] };
-let person = { x: 50, y: 50, dragging: false, radius: 15 };
+let persons = [
+    { id: 1, x: 50, y: 50, dragging: false, radius: 15 },
+    { id: 2, x: 100, y: 50, dragging: false, radius: 15 },
+    { id: 3, x: 150, y: 50, dragging: false, radius: 15 }
+];
 let activeSensors = new Set();
-let sidebarPreference = null; // null follows responsive breakpoints
+let inputSystem = null;
 
 // WebSocket
 const ws = new WebSocket('ws://' + window.location.host + '/ws');
@@ -63,7 +62,10 @@ function sendSensorEvent(entityId, state) {
 }
 
 function update() {
-    render(ctx, layout, state, person, activeSensors, elements);
+    if (!inputSystem) {
+        inputSystem = createInputSystem(persons, layout, activeSensors, sendSensorEvent, update);
+    }
+    render(elements.container, layout, state, persons, activeSensors, elements, inputSystem.drag);
     updateWarningControls();
 }
 
@@ -72,7 +74,7 @@ function updateLayout(newLayout) {
     layout.sensors = newLayout.sensors || [];
     layout.connections = newLayout.connections || [];
     layout.dimensions = newLayout.dimensions || layout.dimensions || { ...DEFAULT_DIMENSIONS };
-    resizeCanvas({ redraw: false });
+    update();
 }
 
 function canSendToServer() {
@@ -86,55 +88,6 @@ function updateWarningControls() {
     if (elements.resetWarningsButton) {
         elements.resetWarningsButton.disabled = !(hasWarnings && canSend);
     }
-
-    const resolveButtons = elements.warningsList?.querySelectorAll('.resolve-warning') || [];
-    resolveButtons.forEach((button) => {
-        const hasId = Boolean(button.dataset.warningId);
-        button.disabled = !(hasId && canSend);
-    });
-}
-
-function getBaseDimensions() {
-    const dims = layout.dimensions || DEFAULT_DIMENSIONS;
-    return {
-        width: dims.width || DEFAULT_DIMENSIONS.width,
-        height: dims.height || DEFAULT_DIMENSIONS.height
-    };
-}
-
-function clampPersonToCanvas(canvasWidth, canvasHeight) {
-    person.x = Math.min(Math.max(person.radius, person.x), canvasWidth - person.radius);
-    person.y = Math.min(Math.max(person.radius, person.y), canvasHeight - person.radius);
-}
-
-function resizeCanvas(options = {}) {
-    const { redraw = true } = options;
-    const container = elements.canvas.parentElement;
-    const baseDims = getBaseDimensions();
-    const measuredWidth = container?.clientWidth || 0;
-    const fallbackWidth = window.innerWidth || baseDims.width;
-    const availableWidth = measuredWidth > 0 ? measuredWidth : Math.max(240, fallbackWidth);
-    const targetWidth = Math.round(Math.min(availableWidth, 1000));
-    const aspectRatio = baseDims.height / baseDims.width || 1;
-    const targetHeight = Math.round(targetWidth * aspectRatio);
-
-    const widthChanged = elements.canvas.width !== targetWidth;
-    const heightChanged = elements.canvas.height !== targetHeight;
-
-    if (widthChanged || heightChanged) {
-        elements.canvas.width = targetWidth;
-        elements.canvas.height = targetHeight;
-        clampPersonToCanvas(targetWidth, targetHeight);
-        if (redraw) {
-            update();
-        }
-    }
-}
-
-function applySidebarState() {
-    const autoCollapse = window.innerWidth < 900;
-    const shouldCollapse = sidebarPreference === null ? autoCollapse : sidebarPreference;
-    document.body.classList.toggle('sidebar-hidden', shouldCollapse);
 }
 
 elements.resetWarningsButton?.addEventListener('click', () => {
@@ -145,45 +98,41 @@ elements.resetWarningsButton?.addEventListener('click', () => {
     elements.resetWarningsButton.disabled = true;
 });
 
-elements.warningsList?.addEventListener('click', (event) => {
-    const button = event.target.closest('.resolve-warning');
-    if (!button) {
-        return;
-    }
-    const warningId = button.dataset.warningId;
-    if (!warningId || !canSendToServer()) {
-        return;
-    }
-    button.disabled = true;
-    ws.send(JSON.stringify({ type: 'resolve_warning', warning_id: warningId }));
-});
+if (elements.automationSelect) {
+    elements.automationSelect.addEventListener('change', async (event) => {
+        console.log("Automation change event detected");
+        const scenarioId = event.target.value;
+        console.log("Selected scenario:", scenarioId);
+        
+        if (!scenarioId) return;
+        
+        if (!inputSystem) {
+            console.warn("Input system not ready");
+            return;
+        }
 
-elements.sidebarToggle?.addEventListener('click', () => {
-    const currentlyCollapsed = document.body.classList.contains('sidebar-hidden');
-    sidebarPreference = !currentlyCollapsed;
-    applySidebarState();
-});
+        if (!layout.areas || layout.areas.length === 0) {
+            console.warn("Layout not loaded yet");
+            event.target.value = "";
+            return;
+        }
 
-// Setup Input
-setupInput(
-    elements.canvas, 
-    person, 
-    layout, 
-    activeSensors, 
-    sendSensorEvent, 
-    update
-);
+        event.target.disabled = true;
 
-resizeCanvas({ redraw: false });
-applySidebarState();
-window.addEventListener('resize', () => {
-    resizeCanvas();
-    if (sidebarPreference === null && window.innerWidth >= 900) {
-        document.body.classList.remove('sidebar-hidden');
-    } else {
-        applySidebarState();
-    }
-});
+        try {
+            console.log("Starting automation...");
+            await runAutomation(scenarioId, persons, layout, inputSystem.checkSensors, update);
+            console.log("Automation completed successfully");
+        } catch (err) {
+            console.error("Automation error:", err);
+        } finally {
+            event.target.disabled = false;
+            event.target.value = ""; // Reset selection
+        }
+    });
+} else {
+    console.error("Automation select element not found in DOM");
+}
 
 // Initial render (empty)
 update();
