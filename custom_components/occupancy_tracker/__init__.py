@@ -15,7 +15,7 @@ from .const import DOMAIN
 from .helpers.types import OccupancyTrackerConfig
 from .coordinator import OccupancyCoordinator
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("occupancy_tracker")
 
 # Schema for individual sensor configuration
 SENSOR_SCHEMA = vol.Schema(

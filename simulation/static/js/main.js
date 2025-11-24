@@ -2,6 +2,7 @@ import { render } from './renderer.js';
 import { createInputSystem } from './input.js';
 import { runAutomation } from './automation.js';
 import { HistoryPlayer } from './history.js';
+import { showToast } from './utils.js';
 
 // DOM Elements
 const elements = {
@@ -34,6 +35,7 @@ const ws = new WebSocket('ws://' + window.location.host + '/ws');
 ws.onopen = () => {
     elements.statusBadge.textContent = 'Connected';
     elements.statusBadge.className = 'status-badge connected';
+    showToast('Connected to simulation server', 'success');
     updateWarningControls();
     updateHistoryButton();
     
@@ -41,12 +43,9 @@ ws.onopen = () => {
     historyPlayer = new HistoryPlayer(ws, (historicalState) => {
         if (historicalState === null) {
             // Return to live mode - request fresh state
-            console.log('[History] Exiting history mode, requesting live state');
-            // The next WebSocket message will update us to live state
             return;
         }
         // Show historical state
-        console.log('[History] Showing historical state at', new Date(historicalState.timestamp * 1000));
         state = historicalState;
         update();
     });
@@ -54,7 +53,15 @@ ws.onopen = () => {
 
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    console.log('[WS] Received message:', data.type, 'history_count=', data.state?.history_count);
+    
+    // Handle log messages from server
+    if (data.type === 'log') {
+        const style = data.level === 'INFO' ? 'color: #03dac6' : 
+                      data.level === 'WARNING' ? 'color: #f59e0b' : 
+                      data.level === 'ERROR' ? 'color: #ef4444' : '';
+        console.log(`%c${data.name}: ${data.message}`, style);
+        return;
+    }
     
     // Always update history count, but skip state updates if in history mode
     if (data.state?.history_count !== undefined) {
@@ -64,7 +71,6 @@ ws.onmessage = (event) => {
     
     // Block state updates when viewing history
     if (historyPlayer && historyPlayer.isInHistoryMode()) {
-        console.log('[WS] Ignoring update - in history mode');
         return;
     }
     
@@ -81,6 +87,7 @@ ws.onmessage = (event) => {
 ws.onclose = () => {
     elements.statusBadge.textContent = 'Disconnected';
     elements.statusBadge.className = 'status-badge disconnected';
+    showToast('Connection lost', 'error', 5000);
     updateWarningControls();
     updateHistoryButton();
 };
@@ -129,7 +136,6 @@ function updateHistoryButton() {
     if (!elements.historyCount || !elements.historyButton) return;
     
     const historyCount = state.history_count || 0;
-    console.log('[History] Updating button: count=', historyCount, 'canSend=', canSendToServer());
     elements.historyCount.textContent = historyCount;
     elements.historyButton.disabled = historyCount === 0 || !canSendToServer();
     
@@ -140,10 +146,12 @@ function updateHistoryButton() {
 
 elements.resetWarningsButton?.addEventListener('click', () => {
     if (!canSendToServer()) {
+        showToast('Cannot reset warnings - not connected', 'error');
         return;
     }
     ws.send(JSON.stringify({ type: 'reset_warnings' }));
     elements.resetWarningsButton.disabled = true;
+    showToast('Warnings reset', 'success');
 });
 
 elements.historyButton?.addEventListener('click', () => {
@@ -167,9 +175,11 @@ elements.verifyHistoryButton?.addEventListener('click', async () => {
         if (result.passed) {
             elements.verifyHistoryButton.textContent = '✅ Passed!';
             console.log('✅ History verification passed');
+            showToast('History verification passed', 'success');
         } else {
             elements.verifyHistoryButton.textContent = '❌ Failed';
             console.error('❌ History verification failed - check server logs');
+            showToast('History verification failed - check logs', 'error');
         }
         
         // Reset button after 3 seconds
@@ -180,6 +190,7 @@ elements.verifyHistoryButton?.addEventListener('click', async () => {
     } catch (err) {
         console.error('Error verifying history:', err);
         elements.verifyHistoryButton.textContent = '❌ Error';
+        showToast('Error verifying history', 'error');
         setTimeout(() => {
             elements.verifyHistoryButton.textContent = '✓ Verify History';
             elements.verifyHistoryButton.disabled = state.history_count === 0;
@@ -189,19 +200,15 @@ elements.verifyHistoryButton?.addEventListener('click', async () => {
 
 if (elements.automationSelect) {
     elements.automationSelect.addEventListener('change', async (event) => {
-        console.log("Automation change event detected");
         const scenarioId = event.target.value;
-        console.log("Selected scenario:", scenarioId);
         
         if (!scenarioId) return;
         
         if (!inputSystem) {
-            console.warn("Input system not ready");
             return;
         }
 
         if (!layout.areas || layout.areas.length === 0) {
-            console.warn("Layout not loaded yet");
             event.target.value = "";
             return;
         }
@@ -209,9 +216,7 @@ if (elements.automationSelect) {
         event.target.disabled = true;
 
         try {
-            console.log("Starting automation...");
             await runAutomation(scenarioId, persons, layout, inputSystem.checkSensors, update);
-            console.log("Automation completed successfully");
         } catch (err) {
             console.error("Automation error:", err);
         } finally {
@@ -219,8 +224,6 @@ if (elements.automationSelect) {
             event.target.value = ""; // Reset selection
         }
     });
-} else {
-    console.error("Automation select element not found in DOM");
 }
 
 // Initial render (empty)

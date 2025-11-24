@@ -31,10 +31,12 @@
 
     <main>
         <div class="legend">
-            <div class="legend-item"><div class="dot" style="background: blue"></div> Motion</div>
-            <div class="legend-item"><div class="dot" style="background: green"></div> Magnetic</div>
-            <div class="legend-item"><div class="dot" style="background: purple"></div> Camera</div>
-            <div class="legend-item"><div class="dot" style="background: red"></div> Person (Drag me)</div>
+            <div class="legend-item"><div class="dot" style="background: blue"></div> Motion Sensor</div>
+            <div class="legend-item"><div class="dot" style="background: green"></div> Magnetic Sensor</div>
+            <div class="legend-item"><div class="dot" style="background: purple"></div> Camera Sensor</div>
+            <div class="legend-item"><div class="dot" style="background: yellow; border: 2px solid blue;"></div> Active</div>
+            <div class="legend-item"><div class="dot" style="background: white; border: 2px solid orange;"></div> Cooldown</div>
+            <div class="legend-item"><div class="dot" style="background: red"></div> Person (Click or Drag)</div>
         </div>
 
         <div class="history-controls" id="historyControls" style="display: none;">
@@ -43,7 +45,9 @@
                 <button id="exitHistoryButton" class="ghost-button">Exit Replay</button>
             </div>
             <div class="slider-container">
+                <button id="historyStepBack" class="icon-btn" title="Step Backward">◀️</button>
                 <button id="historyPlayPause" class="icon-btn" title="Play/Pause">▶️</button>
+                <button id="historyStepForward" class="icon-btn" title="Step Forward">▶️▶️</button>
                 <input type="range" id="historySlider" min="0" max="100" value="0" step="1">
                 <span id="historyInfo" class="history-info">0 / 0</span>
             </div>

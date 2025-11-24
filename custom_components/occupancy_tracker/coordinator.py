@@ -20,7 +20,7 @@ from .helpers.sensor_state import SensorState
 from .helpers.history_verifier import HistoryVerifier
 from .diagnostics import OccupancyDiagnostics
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("coordinator")
 
 class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
     """Coordinator for Occupancy Tracker."""

@@ -11,7 +11,7 @@ from .sensor_state import SensorState
 from .types import OccupancyTrackerConfig
 
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("resolver")
 
 
 class TransitionOutcome(Enum):

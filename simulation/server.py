@@ -24,6 +24,38 @@ _LOGGER = logging.getLogger(__name__)
 # Move HTTP access logs to DEBUG level
 logging.getLogger('aiohttp.access').setLevel(logging.DEBUG)
 
+# WebSocket clients for broadcasting logs
+ws_clients = set()
+
+class WebSocketLogHandler(logging.Handler):
+    """Custom log handler that broadcasts to WebSocket clients."""
+    
+    def emit(self, record):
+        if not ws_clients:
+            return
+        
+        log_entry = {
+            "type": "log",
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage()
+        }
+        
+        # Send to all connected clients
+        for ws in list(ws_clients):
+            try:
+                if not ws.closed:
+                    asyncio.create_task(ws.send_json(log_entry))
+            except Exception:
+                pass
+
+# Add WebSocket handler to coordinator and anomaly_detector loggers
+ws_handler = WebSocketLogHandler()
+ws_handler.setLevel(logging.INFO)
+logging.getLogger('coordinator').addHandler(ws_handler)
+logging.getLogger('anomaly_detector').addHandler(ws_handler)
+logging.getLogger('resolver').addHandler(ws_handler)
+
 def load_config():
     config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
     with open(config_path, "r") as f:
@@ -35,6 +67,9 @@ async def websocket_handler(request):
     
     app = request.app
     coordinator = app["coordinator"]
+    
+    # Register WebSocket client for log broadcasting
+    ws_clients.add(ws)
     
     # Send initial config and layout
     await ws.send_json({
@@ -80,6 +115,7 @@ async def websocket_handler(request):
     except asyncio.CancelledError:
         _LOGGER.debug("WebSocket handler cancelled")
     finally:
+        ws_clients.discard(ws)
         coordinator.async_remove_listener(on_update)
         if not ws.closed:
             await ws.close()

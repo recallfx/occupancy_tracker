@@ -164,8 +164,8 @@ function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
     const areasMerge = areasEnter.merge(areas);
 
     // Color scale for occupancy probability/density
-    // We can use d3.interpolateReds
-    const colorScale = d3.scaleSequential(d3.interpolateReds).domain([0, 1]);
+    // Use blue scale for probability to distinguish from red occupied state
+    const probabilityScale = d3.scaleSequential(d3.interpolateBlues).domain([0, 1]);
 
     areasMerge.select('rect')
         .attr('x', d => d.x)
@@ -182,9 +182,9 @@ function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
                 return '#ffcdd2'; 
             }
             
-            // If not occupied but has probability, use the scale
+            // If not occupied but has probability, use the blue scale
             if (areaState.probability > 0) {
-                return colorScale(areaState.probability);
+                return probabilityScale(areaState.probability);
             }
             
             return d.color || '#f5f5f5';
@@ -295,6 +295,14 @@ function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
     sensorsEnter.append('circle')
         .attr('r', 10);
     
+    // Add cooldown ring for motion sensors
+    sensorsEnter.append('circle')
+        .attr('class', 'cooldown-ring')
+        .attr('r', 14)
+        .attr('fill', 'none')
+        .attr('stroke-width', 2)
+        .attr('opacity', 0);
+    
     sensorsEnter.append('text')
         .attr('class', 'sensor-name')
         .attr('text-anchor', 'end')
@@ -369,6 +377,20 @@ function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
             const sensorState = state.sensors && state.sensors[d.id];
             const isActive = sensorState ? sensorState.state : activeSensors.has(d.id);
             return isActive ? 3 : 1;
+        });
+
+    // Update cooldown ring for motion sensors
+    sensorsMerge.select('.cooldown-ring')
+        .attr('stroke', d => {
+            if (d.type === 'motion') return 'orange';
+            if (d.type === 'magnetic') return 'green';
+            if (d.type.includes('camera')) return 'purple';
+            return 'gray';
+        })
+        .attr('opacity', d => {
+            // Show cooldown ring when sensor is in timeout
+            if (activeSensors.has(d.id + '_cooldown')) return 0.6;
+            return 0;
         });
 
     sensorsMerge.select('.sensor-name')

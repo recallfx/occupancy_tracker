@@ -7,7 +7,7 @@ from .warning import Warning
 from .types import OccupancyTrackerConfig
 
 # Configure logger
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("anomaly_detector")
 
 
 class AnomalyDetector:
@@ -145,7 +145,7 @@ class AnomalyDetector:
 
             timestamp = time.time()
         warning = Warning(warning_type, message, area, sensor_id, timestamp)
-        logger.warning(f"New warning: {warning}")
+        logger.warning(f"⚠️ {message}")
         self.warnings.append(warning)
         return warning
 

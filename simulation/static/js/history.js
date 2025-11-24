@@ -19,6 +19,8 @@ export class HistoryPlayer {
         this.controls = document.getElementById('historyControls');
         this.slider = document.getElementById('historySlider');
         this.playPauseBtn = document.getElementById('historyPlayPause');
+        this.stepBackBtn = document.getElementById('historyStepBack');
+        this.stepForwardBtn = document.getElementById('historyStepForward');
         this.exitBtn = document.getElementById('exitHistoryButton');
         this.infoSpan = document.getElementById('historyInfo');
         this.timestampSpan = document.getElementById('historyTimestamp');
@@ -30,6 +32,14 @@ export class HistoryPlayer {
         
         this.playPauseBtn.addEventListener('click', () => {
             this.togglePlayback();
+        });
+        
+        this.stepBackBtn.addEventListener('click', () => {
+            this.stepBackward();
+        });
+        
+        this.stepForwardBtn.addEventListener('click', () => {
+            this.stepForward();
         });
         
         this.exitBtn.addEventListener('click', () => {

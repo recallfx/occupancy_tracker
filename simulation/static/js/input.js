@@ -2,6 +2,9 @@ const d3 = window.d3;
 
 export function createInputSystem(persons, layout, activeSensors, sendEventCallback, renderCallback) {
     
+    // Store reference to SVG for click-to-move
+    let svg = null;
+    
     const sensorTimeouts = new Map();
 
     function checkSensors() {
@@ -42,8 +45,10 @@ export function createInputSystem(persons, layout, activeSensors, sendEventCallb
                         sendEventCallback(sensor.id, false);
                     } else if (!sensorTimeouts.has(sensor.id)) {
                         // Motion sensors have a cooldown
+                        activeSensors.add(sensor.id + '_cooldown'); // Visual indicator
                         const timeoutId = setTimeout(() => {
                             activeSensors.delete(sensor.id);
+                            activeSensors.delete(sensor.id + '_cooldown');
                             sendEventCallback(sensor.id, false);
                             sensorTimeouts.delete(sensor.id);
                             renderCallback(); // Update UI when sensor turns off
@@ -74,6 +79,37 @@ export function createInputSystem(persons, layout, activeSensors, sendEventCallb
             d.dragging = false;
             d3.select(event.sourceEvent.target).attr("cursor", "grab");
         });
+
+    // Click-to-move: Set up click handler on SVG background
+    function setupClickToMove() {
+        svg = d3.select('#sim-container svg');
+        if (svg.empty()) {
+            setTimeout(setupClickToMove, 100);
+            return;
+        }
+        
+        svg.on('click', (event) => {
+            // Only respond to direct SVG clicks, not sensor/person clicks
+            if (event.target.tagName !== 'svg' && event.target.tagName !== 'rect') return;
+            
+            const [x, y] = d3.pointer(event);
+            
+            // Move the first person to clicked location
+            if (persons.length > 0) {
+                const width = layout.dimensions?.width || 800;
+                const height = layout.dimensions?.height || 600;
+                const person = persons[0];
+                
+                person.x = Math.max(person.radius, Math.min(width - person.radius, x));
+                person.y = Math.max(person.radius, Math.min(height - person.radius, y));
+                
+                checkSensors();
+                renderCallback();
+            }
+        });
+    }
+    
+    setupClickToMove();
 
     return { drag, checkSensors };
 }
