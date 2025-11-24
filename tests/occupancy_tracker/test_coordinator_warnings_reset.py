@@ -54,17 +54,17 @@ class TestOccupancyCoordinatorReset:
         timestamp = time.time()
 
         # Set up some state
-        coordinator.area_manager.areas["room1"].occupancy = 2
-        coordinator.area_manager.areas["room1"].record_motion(timestamp)
+        coordinator.areas["room1"].occupancy = 2
+        coordinator.areas["room1"].record_motion(timestamp)
         coordinator.process_sensor_event("sensor.motion_1", True, timestamp)
 
         # Reset
         coordinator.reset()
 
         # Everything should be cleared
-        assert coordinator.area_manager.areas["room1"].occupancy == 0
-        assert coordinator.area_manager.areas["room1"].last_motion == 0
-        assert coordinator.sensor_manager.sensors["sensor.motion_1"].current_state is False
+        assert coordinator.areas["room1"].occupancy == 0
+        assert coordinator.areas["room1"].last_motion == 0
+        assert coordinator.sensors["sensor.motion_1"].current_state is False
         assert len(coordinator.get_warnings()) == 0
 
     def test_reset_anomalies(self):
@@ -79,12 +79,12 @@ class TestOccupancyCoordinatorReset:
         coordinator = OccupancyCoordinator(hass, config)
 
         # Set up state and warnings
-        coordinator.area_manager.areas["room1"].occupancy = 1
+        coordinator.areas["room1"].occupancy = 1
         coordinator.anomaly_detector._create_warning("test", "Test")
 
         # Reset anomalies only
         coordinator.reset_anomalies()
 
         # Occupancy preserved, warnings cleared
-        assert coordinator.area_manager.areas["room1"].occupancy == 1
+        assert coordinator.areas["room1"].occupancy == 1
         assert len(coordinator.get_warnings()) == 0

@@ -53,7 +53,7 @@ class TestOccupancyCountSensor:
 
     def test_sensor_state_occupied(self, coordinator):
         """Test sensor state when area is occupied."""
-        coordinator.area_manager.areas["living_room"].occupancy = 3
+        coordinator.areas["living_room"].occupancy = 3
 
         sensor = OccupancyCountSensor(coordinator, "living_room")
 
@@ -75,8 +75,8 @@ class TestOccupancyProbabilitySensor:
         """Test sensor state reflects probability."""
         import time
 
-        coordinator.area_manager.areas["living_room"].occupancy = 1
-        coordinator.area_manager.areas["living_room"].record_motion(time.time())
+        coordinator.areas["living_room"].occupancy = 1
+        coordinator.areas["living_room"].record_motion(time.time())
 
         sensor = OccupancyProbabilitySensor(coordinator, "living_room")
 
@@ -196,8 +196,8 @@ class TestOccupiedInsideAreasSensor:
 
     def test_sensor_state(self, coordinator):
         """Test sensor state shows count of occupied indoor areas."""
-        coordinator.area_manager.areas["living_room"].occupancy = 1
-        coordinator.area_manager.areas["bedroom"].occupancy = 2
+        coordinator.areas["living_room"].occupancy = 1
+        coordinator.areas["bedroom"].occupancy = 2
         # porch is outdoor
 
         sensor = OccupiedInsideAreasSensor(coordinator)
@@ -206,8 +206,8 @@ class TestOccupiedInsideAreasSensor:
 
     def test_sensor_attributes(self, coordinator):
         """Test sensor attributes list occupied areas."""
-        coordinator.area_manager.areas["living_room"].occupancy = 1
-        coordinator.area_manager.areas["bedroom"].occupancy = 1
+        coordinator.areas["living_room"].occupancy = 1
+        coordinator.areas["bedroom"].occupancy = 1
 
         sensor = OccupiedInsideAreasSensor(coordinator)
         attrs = sensor.extra_state_attributes
@@ -231,7 +231,7 @@ class TestOccupiedOutsideAreasSensor:
 
     def test_sensor_state(self, coordinator):
         """Test sensor state shows count of occupied outdoor areas."""
-        coordinator.area_manager.areas["porch"].occupancy = 1
+        coordinator.areas["porch"].occupancy = 1
 
         sensor = OccupiedOutsideAreasSensor(coordinator)
 
@@ -239,7 +239,7 @@ class TestOccupiedOutsideAreasSensor:
 
     def test_sensor_attributes(self, coordinator):
         """Test sensor attributes list occupied outdoor areas."""
-        coordinator.area_manager.areas["porch"].occupancy = 2
+        coordinator.areas["porch"].occupancy = 2
 
         sensor = OccupiedOutsideAreasSensor(coordinator)
         attrs = sensor.extra_state_attributes
@@ -254,8 +254,8 @@ class TestTotalOccupantsSensors:
 
     def test_total_occupants_inside(self, coordinator):
         """Test total occupants inside sensor."""
-        coordinator.area_manager.areas["living_room"].occupancy = 2
-        coordinator.area_manager.areas["bedroom"].occupancy = 1
+        coordinator.areas["living_room"].occupancy = 2
+        coordinator.areas["bedroom"].occupancy = 1
 
         sensor = TotalOccupantsInsideSensor(coordinator)
 
@@ -264,7 +264,7 @@ class TestTotalOccupantsSensors:
 
     def test_total_occupants_outside(self, coordinator):
         """Test total occupants outside sensor."""
-        coordinator.area_manager.areas["porch"].occupancy = 2
+        coordinator.areas["porch"].occupancy = 2
 
         sensor = TotalOccupantsOutsideSensor(coordinator)
 
@@ -273,9 +273,9 @@ class TestTotalOccupantsSensors:
 
     def test_total_occupants(self, coordinator):
         """Test total occupants sensor."""
-        coordinator.area_manager.areas["living_room"].occupancy = 2
-        coordinator.area_manager.areas["bedroom"].occupancy = 1
-        coordinator.area_manager.areas["porch"].occupancy = 1
+        coordinator.areas["living_room"].occupancy = 2
+        coordinator.areas["bedroom"].occupancy = 1
+        coordinator.areas["porch"].occupancy = 1
 
         sensor = TotalOccupantsSensor(coordinator)
 

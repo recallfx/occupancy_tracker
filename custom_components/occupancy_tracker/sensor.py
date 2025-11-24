@@ -15,7 +15,10 @@ from .sensors import (
 
 
 async def async_setup_platform(
-    hass, config: OccupancyTrackerConfig, async_add_entities
+    hass,
+    config: OccupancyTrackerConfig,
+    async_add_entities,
+    discovery_info=None,
 ):
     """Set up the Occupancy Tracker sensors."""
     coordinator = hass.data[DOMAIN]["coordinator"]

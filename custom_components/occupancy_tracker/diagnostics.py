@@ -16,7 +16,7 @@ class OccupancyDiagnostics:
 
     def get_area_status(self, area_id: str) -> Dict[str, Any]:
         """Get detailed status information for an area."""
-        area = self.coordinator.area_manager.get_area(area_id)
+        area = self.coordinator.areas.get(area_id)
         if not area:
             return {"error": "Area not found"}
 
@@ -38,10 +38,9 @@ class OccupancyDiagnostics:
 
     def get_system_status(self) -> Dict[str, Any]:
         """Get overall system status information."""
-        areas = self.coordinator.area_manager.get_all_areas()
         occupied_areas = [
             (area_id, area.occupancy)
-            for area_id, area in areas.items()
+            for area_id, area in self.coordinator.areas.items()
             if area.occupancy > 0
         ]
 
@@ -56,16 +55,16 @@ class OccupancyDiagnostics:
     def diagnose_motion_issues(self, sensor_id: Optional[str] = None) -> Dict[str, Any]:
         """Diagnostic method to help identify why motion isn't being detected."""
         sensors_to_check = (
-            [sensor_id] if sensor_id else list(self.coordinator.sensor_manager.sensors.keys())
+            [sensor_id] if sensor_id else list(self.coordinator.sensors.keys())
         )
         results = {}
 
         for s_id in sensors_to_check:
-            if s_id not in self.coordinator.sensor_manager.sensors:
+            if s_id not in self.coordinator.sensors:
                 results[s_id] = {"error": "Sensor not found"}
                 continue
 
-            sensor = self.coordinator.sensor_manager.sensors[s_id]
+            sensor = self.coordinator.sensors[s_id]
             sensor_type = sensor.config.get("type", "unknown")
             area_id = sensor.config.get("area")
 
@@ -75,7 +74,7 @@ class OccupancyDiagnostics:
                 in ["motion", "camera_motion", "camera_person"],
                 "current_state": sensor.current_state,
                 "area_id": area_id,
-                "area_exists": area_id in self.coordinator.area_manager.areas
+                "area_exists": area_id in self.coordinator.areas
                 if area_id
                 else False,
                 "history_length": len(sensor.history)
@@ -87,8 +86,8 @@ class OccupancyDiagnostics:
             }
 
             # Add area information if applicable
-            if area_id and area_id in self.coordinator.area_manager.areas:
-                area = self.coordinator.area_manager.areas[area_id]
+            if area_id and area_id in self.coordinator.areas:
+                area = self.coordinator.areas[area_id]
                 sensor_info["area_info"] = {
                     "occupancy": area.occupancy,
                     "last_motion": area.last_motion,

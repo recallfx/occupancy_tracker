@@ -55,10 +55,10 @@ class TestAsyncSetup:
 
         coordinator = hass.data[DOMAIN]["coordinator"]
 
-        assert len(coordinator.area_manager.areas) == 2
-        assert len(coordinator.sensor_manager.sensors) == 2
-        assert "living_room" in coordinator.area_manager.areas
-        assert "kitchen" in coordinator.area_manager.areas
+        assert len(coordinator.areas) == 2
+        assert len(coordinator.sensors) == 2
+        assert "living_room" in coordinator.areas
+        assert "kitchen" in coordinator.areas
 
     async def test_setup_no_configuration(self, hass: HomeAssistant):
         """Test setup with no configuration."""
@@ -148,7 +148,7 @@ class TestStateChangeListener:
         coordinator.process_sensor_event("binary_sensor.motion_living", False, time.time())
 
         # Sensor state should be False
-        assert coordinator.sensor_manager.sensors["binary_sensor.motion_living"].current_state is False
+        assert coordinator.sensors["binary_sensor.motion_living"].current_state is False
 
     async def test_state_change_listener_unknown_sensor(
         self, hass: HomeAssistant, sample_config
@@ -179,7 +179,7 @@ class TestIntegrationConfiguration:
 
         assert result is True
         coordinator = hass.data[DOMAIN]["coordinator"]
-        assert len(coordinator.area_manager.areas) == 1
+        assert len(coordinator.areas) == 1
 
     async def test_configuration_with_multiple_sensor_types(self, hass: HomeAssistant):
         """Test configuration with different sensor types."""
@@ -209,7 +209,7 @@ class TestIntegrationConfiguration:
 
         assert result is True
         coordinator = hass.data[DOMAIN]["coordinator"]
-        assert len(coordinator.sensor_manager.sensors) == 3
+        assert len(coordinator.sensors) == 3
 
     async def test_configuration_with_outdoor_areas(self, hass: HomeAssistant):
         """Test configuration with indoor and outdoor areas."""
@@ -228,9 +228,9 @@ class TestIntegrationConfiguration:
 
         assert result is True
         coordinator = hass.data[DOMAIN]["coordinator"]
-        assert coordinator.area_manager.areas["living_room"].is_indoors is True
-        assert coordinator.area_manager.areas["porch"].is_indoors is False
-        assert coordinator.area_manager.areas["porch"].is_exit_capable is True
+        assert coordinator.areas["living_room"].is_indoors is True
+        assert coordinator.areas["porch"].is_indoors is False
+        assert coordinator.areas["porch"].is_exit_capable is True
 
     async def test_configuration_with_complex_adjacency(self, hass: HomeAssistant):
         """Test configuration with complex adjacency graph."""
@@ -278,7 +278,7 @@ class TestIntegrationDataFlow:
         coordinator.process_sensor_event("binary_sensor.motion_living", True, timestamp)
 
         # Area should have motion recorded
-        assert coordinator.area_manager.areas["living_room"].last_motion == timestamp
+        assert coordinator.areas["living_room"].last_motion == timestamp
 
     async def test_multiple_sensor_events(self, hass: HomeAssistant, sample_config):
         """Test processing multiple sensor events."""
@@ -294,8 +294,8 @@ class TestIntegrationDataFlow:
         coordinator.process_sensor_event("binary_sensor.motion_kitchen", True, t2)
 
         # Both areas should have motion
-        assert coordinator.area_manager.areas["living_room"].last_motion == t1
-        assert coordinator.area_manager.areas["kitchen"].last_motion == t2
+        assert coordinator.areas["living_room"].last_motion == t1
+        assert coordinator.areas["kitchen"].last_motion == t2
 
     async def test_occupancy_tracking_through_integration(
         self, hass: HomeAssistant, sample_config

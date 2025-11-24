@@ -108,30 +108,50 @@ class MapStateRecorder:
         areas: Dict[str, AreaState],
         sensors: Dict[str, SensorState],
     ) -> MapSnapshot:
-        area_payload: Dict[str, Dict[str, Any]] = {}
-        for area_id, area in areas.items():
-            area_payload[area_id] = {
-                "occupancy": area.occupancy,
-                "is_occupied": area.is_occupied,
-                "last_motion": area.last_motion,
-            }
-
-        sensor_payload: Dict[str, Dict[str, Any]] = {}
-        for sensor_id, sensor in sensors.items():
-            sensor_payload[sensor_id] = {
-                "state": sensor.current_state,
-                "last_changed": sensor.last_changed,
-            }
-
         snapshot = MapSnapshot(
             timestamp=timestamp,
             event_type=event_type,
             description=description,
-            areas=area_payload,
-            sensors=sensor_payload,
+            areas=self._serialize_areas(areas),
+            sensors=self._serialize_sensors(sensors),
         )
         self.snapshots.append(snapshot)
         return snapshot
+
+    def update_latest_state(
+        self,
+        areas: Dict[str, AreaState],
+        sensors: Dict[str, SensorState],
+    ) -> None:
+        """Refresh the most recent snapshot with the latest state."""
+        if not self.snapshots:
+            return
+        latest = self.snapshots[-1]
+        latest.areas = self._serialize_areas(areas)
+        latest.sensors = self._serialize_sensors(sensors)
+
+    def _serialize_areas(
+        self, areas: Dict[str, AreaState]
+    ) -> Dict[str, Dict[str, Any]]:
+        payload: Dict[str, Dict[str, Any]] = {}
+        for area_id, area in areas.items():
+            payload[area_id] = {
+                "occupancy": area.occupancy,
+                "is_occupied": area.is_occupied,
+                "last_motion": area.last_motion,
+            }
+        return payload
+
+    def _serialize_sensors(
+        self, sensors: Dict[str, SensorState]
+    ) -> Dict[str, Dict[str, Any]]:
+        payload: Dict[str, Dict[str, Any]] = {}
+        for sensor_id, sensor in sensors.items():
+            payload[sensor_id] = {
+                "state": sensor.current_state,
+                "last_changed": sensor.last_changed,
+            }
+        return payload
 
     def get_history(self) -> list[MapSnapshot]:
         """Return a list copy of all recorded snapshots."""

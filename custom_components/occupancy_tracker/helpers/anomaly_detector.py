@@ -1,5 +1,4 @@
 import logging
-from collections import deque
 from typing import Dict, List, Optional, Set
 
 from .area_state import AreaState
@@ -57,7 +56,7 @@ class AnomalyDetector:
         for sensor_id, sensor in sensors.items():
             # Calculate if stuck (only checks for long active duration now)
             is_stuck = sensor.calculate_is_stuck(
-                False, triggered_sensor.last_update_time
+                triggered_sensor.last_update_time
             )
 
             if is_stuck and sensor.is_reliable:
@@ -73,109 +72,6 @@ class AnomalyDetector:
                     timestamp=triggered_sensor.last_update_time,
                 )
                 sensor.is_reliable = False
-
-    def handle_unexpected_motion(
-        self,
-        area: AreaState,
-        areas: Dict[str, AreaState],
-        sensors: Dict[str, SensorState],
-        timestamp: float,
-    ) -> bool:
-        """Handle unexpected motion in an area that should be unoccupied.
-
-        Returns:
-            bool: True if this is valid entry (not an anomaly), False if anomaly detected
-        """
-        # Check for valid paths from occupied areas
-        valid_entry = False
-
-        # Check adjacent areas for recent activity
-        adjacency = self.adjacency_map.get(area.id, [])
-        
-        # First pass: Look for adjacent areas with RECENT motion (high confidence)
-        for adjacent_area_id in adjacency:
-            if adjacent_area_id in areas:
-                adjacent_area = areas[adjacent_area_id]
-                if adjacent_area.occupancy > 0 and adjacent_area.has_recent_motion(
-                    timestamp, self.recent_motion_window
-                ):
-                    # Likely moved from adjacent occupied room
-                    valid_entry = True
-                    logger.info(f"Person moved from {adjacent_area_id} to {area.id} (recent motion)")
-                    adjacent_area.record_exit(timestamp)
-                    break
-        
-        # Second pass: If no recent motion found, look for ANY occupied adjacent area (Sleep Scenario)
-        if not valid_entry:
-            for adjacent_area_id in adjacency:
-                if adjacent_area_id in areas:
-                    adjacent_area = areas[adjacent_area_id]
-                    if adjacent_area.occupancy > 0:
-                        # Moved from occupied room (even if inactive/sleeping)
-                        valid_entry = True
-                        logger.info(f"Person moved from {adjacent_area_id} to {area.id} (sleep/inactive)")
-                        adjacent_area.record_exit(timestamp)
-                        break
-
-        if not valid_entry:
-            # Could be entry from outside if this is an entry point
-            if area.is_exit_capable:
-                logger.info(f"Person entered {area.id} from outside")
-                valid_entry = True
-            else:
-                logger.warning(
-                    f"Unexpected motion in {area.id} without clear entry path"
-                )
-                self._create_warning(
-                    "unexpected_motion",
-                    f"Unexpected motion in {area.id}",
-                    area=area.id,
-                    timestamp=timestamp,
-                )
-
-        return valid_entry
-
-    def check_simultaneous_motion(
-        self, trigger_area_id: str, areas: Dict[str, AreaState], timestamp: float
-    ) -> None:
-        """Check for simultaneous motion in multiple areas."""
-        # Get list of areas with recent motion
-        areas_with_recent_motion = []
-        for area_id, area in areas.items():
-            if area_id != trigger_area_id and area.has_recent_motion(timestamp, 10):
-                areas_with_recent_motion.append(area_id)
-
-        if areas_with_recent_motion:
-            non_adjacent = [
-                area_id
-                for area_id in areas_with_recent_motion
-                if not self._has_path_within_hops(trigger_area_id, area_id, 2)
-            ]
-
-            if non_adjacent:
-                self._create_warning(
-                    "simultaneous_motion",
-                    f"Motion detected simultaneously in non-adjacent areas: {trigger_area_id} and {', '.join(non_adjacent)}",
-                    timestamp=timestamp,
-                )
-
-    def _has_path_within_hops(self, start: str, goal: str, max_hops: int) -> bool:
-        if start == goal:
-            return True
-        visited = set([start])
-        queue = deque([(start, 0)])
-
-        while queue:
-            node, depth = queue.popleft()
-            if depth >= max_hops:
-                continue
-            for neighbor in self.adjacency_map.get(node, []):
-                if neighbor == goal:
-                    return True
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append((neighbor, depth + 1))
-        return False
 
     def check_timeouts(self, areas: Dict[str, AreaState], timestamp: float) -> None:
         """Check for timeout conditions like inactivity and extended occupancy."""
@@ -258,6 +154,21 @@ class AnomalyDetector:
         if active_only:
             return [w for w in self.warnings if w.is_active]
         return self.warnings
+
+    def record_unexpected_activation(
+        self,
+        area_id: str,
+        sensor_id: Optional[str],
+        timestamp: float,
+    ) -> None:
+        """Create a warning when motion cannot be explained by adjacency."""
+        self._create_warning(
+            "unexpected_motion",
+            f"Unexpected motion in {area_id}",
+            area=area_id,
+            sensor_id=sensor_id,
+            timestamp=timestamp,
+        )
 
     def resolve_warning(self, warning_id: str) -> bool:
         """Resolve a specific warning by ID."""

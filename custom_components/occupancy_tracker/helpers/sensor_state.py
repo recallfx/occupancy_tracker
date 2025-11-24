@@ -15,7 +15,6 @@ class SensorState:
         self.history = []  # List of (timestamp, state) tuples
         self.is_reliable = True
         self.is_stuck = False
-        self.adjacent_motion_times = []  # List of (area_id, timestamp) tuples
 
     def update_state(self, new_state: bool, timestamp: float) -> bool:
         """Update sensor state and return whether state changed."""
@@ -36,7 +35,7 @@ class SensorState:
         return False
 
     def calculate_is_stuck(
-        self, has_recent_adjacent_motion: bool, timestamp: float
+        self, timestamp: float
     ) -> bool:
         """Detect if sensor appears stuck in one state."""
 
@@ -52,14 +51,3 @@ class SensorState:
         self.is_stuck = False
         return False
 
-    def record_adjacent_motion(self, area_id: str, timestamp: float) -> None:
-        """Record motion in an adjacent area.
-
-        Args:
-            area_id: The ID of the adjacent area with motion
-            timestamp: The timestamp of the motion event
-        """
-        self.adjacent_motion_times.append((area_id, timestamp))
-        # Keep only recent history (last 100 events)
-        if len(self.adjacent_motion_times) > 100:
-            self.adjacent_motion_times.pop(0)

@@ -22,15 +22,19 @@ SENSOR_SCHEMA = vol.Schema(
     {
         vol.Required("area"): vol.Any(cv.string, [cv.string]),
         vol.Optional("type", default="motion"): cv.string,
-    }
+        vol.Optional("between_areas"): vol.All([cv.string]),
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 # Schema for individual area configuration
 AREA_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Optional("name"): cv.string,
+        vol.Optional("indoors", default=True): cv.boolean,
         vol.Optional("exit_capable", default=False): cv.boolean,
-    }
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 # Main configuration schema

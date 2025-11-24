@@ -82,7 +82,7 @@ class TestSensorState:
         sensor.update_state(True, timestamp)
 
         # Check 25 hours later
-        is_stuck = sensor.calculate_is_stuck(False, timestamp + 25 * 3600)
+        is_stuck = sensor.calculate_is_stuck(timestamp + 25 * 3600)
 
         assert is_stuck is True
         assert sensor.is_stuck is True
@@ -98,7 +98,7 @@ class TestSensorState:
         # Check with recent adjacent motion but sensor hasn't changed for 60 seconds
         # This logic was removed as it caused false positives
         is_stuck = sensor.calculate_is_stuck(
-            has_recent_adjacent_motion=True, timestamp=timestamp + 60
+            timestamp=timestamp + 60
         )
 
         assert is_stuck is False
@@ -112,7 +112,7 @@ class TestSensorState:
         sensor.update_state(True, timestamp)
 
         # Check only 1 hour later
-        is_stuck = sensor.calculate_is_stuck(False, timestamp + 3600)
+        is_stuck = sensor.calculate_is_stuck(timestamp + 3600)
 
         assert is_stuck is False
         assert sensor.is_stuck is False

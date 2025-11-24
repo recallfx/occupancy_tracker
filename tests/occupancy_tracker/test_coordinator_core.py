@@ -27,10 +27,10 @@ class TestOccupancyCoordinatorInit:
         coordinator = OccupancyCoordinator(hass, config)
 
         assert coordinator.config == config
-        assert len(coordinator.area_manager.areas) == 2
-        assert len(coordinator.sensor_manager.sensors) == 1
-        assert "living_room" in coordinator.area_manager.areas
-        assert "sensor.motion_living" in coordinator.sensor_manager.sensors
+        assert len(coordinator.areas) == 2
+        assert len(coordinator.sensors) == 1
+        assert "living_room" in coordinator.areas
+        assert "sensor.motion_living" in coordinator.sensors
 
     def test_initialize_areas(self):
         """Test area initialization from config."""
@@ -46,10 +46,10 @@ class TestOccupancyCoordinatorInit:
 
         coordinator = OccupancyCoordinator(hass, config)
 
-        assert coordinator.area_manager.areas["bedroom"].is_indoors is True
-        assert coordinator.area_manager.areas["bedroom"].is_exit_capable is False
-        assert coordinator.area_manager.areas["porch"].is_indoors is False
-        assert coordinator.area_manager.areas["porch"].is_exit_capable is True
+        assert coordinator.areas["bedroom"].is_indoors is True
+        assert coordinator.areas["bedroom"].is_exit_capable is False
+        assert coordinator.areas["porch"].is_indoors is False
+        assert coordinator.areas["porch"].is_exit_capable is True
 
     def test_initialize_sensors(self):
         """Test sensor initialization from config."""
@@ -68,8 +68,8 @@ class TestOccupancyCoordinatorInit:
 
         coordinator = OccupancyCoordinator(hass, config)
 
-        assert coordinator.sensor_manager.sensors["sensor.motion_1"].config["type"] == "motion"
-        assert coordinator.sensor_manager.sensors["sensor.door_1"].config["type"] == "magnetic"
+        assert coordinator.sensors["sensor.motion_1"].config["type"] == "motion"
+        assert coordinator.sensors["sensor.door_1"].config["type"] == "magnetic"
 
 
 class TestOccupancyCoordinatorSensorEvents:
@@ -92,9 +92,9 @@ class TestOccupancyCoordinatorSensorEvents:
         coordinator.process_sensor_event("sensor.motion_living", True, timestamp)
 
         # Motion should be recorded
-        assert coordinator.area_manager.areas["living_room"].last_motion == timestamp
+        assert coordinator.areas["living_room"].last_motion == timestamp
         # Entry should be recorded (from outside via exit_capable)
-        assert coordinator.area_manager.areas["living_room"].occupancy == 1
+        assert coordinator.areas["living_room"].occupancy == 1
 
     def test_process_motion_event_occupied_room(self):
         """Test motion in already occupied room."""
@@ -112,13 +112,13 @@ class TestOccupancyCoordinatorSensorEvents:
 
         # First motion
         coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp)
-        occupancy_after_first = coordinator.area_manager.areas["kitchen"].occupancy
+        occupancy_after_first = coordinator.areas["kitchen"].occupancy
 
         # Second motion (repeated)
         coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
 
         # Occupancy shouldn't increase again
-        assert coordinator.area_manager.areas["kitchen"].occupancy == occupancy_after_first
+        assert coordinator.areas["kitchen"].occupancy == occupancy_after_first
 
     def test_process_unknown_sensor(self):
         """Test processing event from unknown sensor."""
@@ -171,7 +171,7 @@ class TestOccupancyCoordinatorSensorEvents:
 
         coordinator.process_sensor_event("sensor.camera_motion", True, timestamp)
 
-        assert coordinator.area_manager.areas["front_porch"].last_motion == timestamp
+        assert coordinator.areas["front_porch"].last_motion == timestamp
 
     def test_process_camera_person_sensor(self):
         """Test processing camera person detection sensor."""
@@ -189,7 +189,7 @@ class TestOccupancyCoordinatorSensorEvents:
 
         coordinator.process_sensor_event("sensor.camera_person", True, timestamp)
 
-        assert coordinator.area_manager.areas["driveway"].last_motion == timestamp
+        assert coordinator.areas["driveway"].last_motion == timestamp
 
     def test_sensor_state_change_tracking(self):
         """Test that sensor state changes are properly tracked."""
@@ -206,10 +206,10 @@ class TestOccupancyCoordinatorSensorEvents:
         t1 = time.time()
 
         coordinator.process_sensor_event("sensor.motion", True, t1)
-        assert coordinator.sensor_manager.sensors["sensor.motion"].current_state is True
+        assert coordinator.sensors["sensor.motion"].current_state is True
 
         coordinator.process_sensor_event("sensor.motion", False, t1 + 10)
-        assert coordinator.sensor_manager.sensors["sensor.motion"].current_state is False
+        assert coordinator.sensors["sensor.motion"].current_state is False
 
     def test_sensor_event_creates_snapshot(self):
         """Each sensor transition should append a snapshot to the recorder."""
@@ -283,15 +283,15 @@ class TestOccupancyCoordinatorTransitions:
         # Start in living room (entry from outside - both are not exit_capable)
         # This will create an unexpected motion warning but still increment
         coordinator.process_sensor_event("sensor.motion_living", True, timestamp)
-        assert coordinator.area_manager.areas["living_room"].occupancy >= 1
+        assert coordinator.areas["living_room"].occupancy >= 1
 
         # Move to kitchen (adjacent, recent motion in living room)
         coordinator.process_sensor_event("sensor.motion_kitchen", True, timestamp + 10)
 
         # Kitchen should have person
-        assert coordinator.area_manager.areas["kitchen"].occupancy >= 1
+        assert coordinator.areas["kitchen"].occupancy >= 1
         # Living room should have decremented if transition detected
-        # (This depends on the exact logic in handle_unexpected_motion)
+        # (This depends on the exact logic in MapOccupancyResolver)
 
     def test_entry_from_outside(self):
         """Test person entering from outside through exit-capable area."""
@@ -311,7 +311,7 @@ class TestOccupancyCoordinatorTransitions:
         coordinator.process_sensor_event("sensor.motion_door", True, time.time())
 
         # Should register entry
-        assert coordinator.area_manager.areas["front_door"].occupancy == 1
+        assert coordinator.areas["front_door"].occupancy == 1
 
 
 class TestOccupancyCoordinatorQueries:
@@ -332,7 +332,7 @@ class TestOccupancyCoordinatorQueries:
         assert coordinator.get_occupancy("bedroom") == 0
 
         # Manually set occupancy
-        coordinator.area_manager.areas["bedroom"].occupancy = 2
+        coordinator.areas["bedroom"].occupancy = 2
 
         assert coordinator.get_occupancy("bedroom") == 2
 
@@ -357,8 +357,8 @@ class TestOccupancyCoordinatorQueries:
         coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        coordinator.area_manager.areas["office"].occupancy = 1
-        coordinator.area_manager.areas["office"].record_motion(timestamp)
+        coordinator.areas["office"].occupancy = 1
+        coordinator.areas["office"].record_motion(timestamp)
 
         probability = coordinator.get_occupancy_probability("office")
 
@@ -394,8 +394,8 @@ class TestOccupancyCoordinatorQueries:
         coordinator = OccupancyCoordinator(hass, config)
         timestamp = time.time()
 
-        coordinator.area_manager.areas["living_room"].occupancy = 2
-        coordinator.area_manager.areas["living_room"].record_motion(timestamp)
+        coordinator.areas["living_room"].occupancy = 2
+        coordinator.areas["living_room"].record_motion(timestamp)
 
         status = coordinator.get_area_status("living_room")
 
@@ -431,8 +431,8 @@ class TestOccupancyCoordinatorQueries:
 
         coordinator = OccupancyCoordinator(hass, config)
 
-        coordinator.area_manager.areas["room1"].occupancy = 2
-        coordinator.area_manager.areas["room2"].occupancy = 1
+        coordinator.areas["room1"].occupancy = 2
+        coordinator.areas["room2"].occupancy = 1
 
         status = coordinator.get_system_status()
 
@@ -458,10 +458,10 @@ class TestOccupancyCoordinatorTimeouts:
         timestamp = time.time()
 
         # Set up occupied area with old motion
-        coordinator.area_manager.areas["bedroom"].occupancy = 1
-        coordinator.area_manager.areas["bedroom"].last_motion = timestamp - (25 * 3600)
+        coordinator.areas["bedroom"].occupancy = 1
+        coordinator.areas["bedroom"].last_motion = timestamp - (25 * 3600)
 
         coordinator.check_timeouts(timestamp)
 
         # Should reset due to inactivity
-        assert coordinator.area_manager.areas["bedroom"].occupancy == 0
+        assert coordinator.areas["bedroom"].occupancy == 0

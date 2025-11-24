@@ -204,9 +204,9 @@ class TestMultiRoomSimultaneous:
         helper.trigger_sensor("binary_sensor.motion_bedroom", True, delay=0.5)
 
         # All should register motion
-        assert coordinator.area_manager.areas["living_room"].last_motion is not None
-        assert coordinator.area_manager.areas["kitchen"].last_motion is not None
-        assert coordinator.area_manager.areas["bedroom"].last_motion is not None
+        assert coordinator.areas["living_room"].last_motion is not None
+        assert coordinator.areas["kitchen"].last_motion is not None
+        assert coordinator.areas["bedroom"].last_motion is not None
 
 
 @pytest.mark.end_to_end

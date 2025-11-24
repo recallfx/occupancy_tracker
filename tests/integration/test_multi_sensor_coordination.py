@@ -173,12 +173,12 @@ class TestSensorTimingInteractions:
 
         # All should register the motion
         assert (
-            coordinator.area_manager.areas["entrance"].last_motion ==pytest.approx(
+            coordinator.areas["entrance"].last_motion ==pytest.approx(
                 base_time, abs=0.01
             )
         )
         assert (
-            coordinator.area_manager.areas["main_bedroom"].last_motion
+            coordinator.areas["main_bedroom"].last_motion
             == pytest.approx(base_time + 0.9, abs=0.01)
         )
 
@@ -196,19 +196,19 @@ class TestSensorTimingInteractions:
 
         # All three are ON simultaneously
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_living"
             ].current_state
             is True
         )
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_kitchen"
             ].current_state
             is True
         )
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_bedroom"
             ].current_state
             is True
@@ -221,7 +221,7 @@ class TestSensorTimingInteractions:
 
         # All should be off
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_living"
             ].current_state
             is False
@@ -248,7 +248,7 @@ class TestSensorTimingInteractions:
 
         # Kitchen should still be on
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_kitchen"
             ].current_state
             is True
@@ -258,7 +258,7 @@ class TestSensorTimingInteractions:
         helper.trigger_sensor("binary_sensor.motion_kitchen", False)
 
         assert (
-            coordinator.sensor_manager.sensors[
+            coordinator.sensors[
                 "binary_sensor.motion_kitchen"
             ].current_state
             is False

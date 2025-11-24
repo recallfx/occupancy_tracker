@@ -40,7 +40,7 @@ class TestResetAnomaliesButton:
         coordinator.anomaly_detector._create_warning("test2", "Test warning 2")
 
         # Set up occupancy
-        coordinator.area_manager.areas["living_room"].occupancy = 2
+        coordinator.areas["living_room"].occupancy = 2
 
         assert len(coordinator.get_warnings()) == 2
 
@@ -53,7 +53,7 @@ class TestResetAnomaliesButton:
         assert len(coordinator.get_warnings()) == 0
 
         # Occupancy should be preserved
-        assert coordinator.area_manager.areas["living_room"].occupancy == 2
+        assert coordinator.areas["living_room"].occupancy == 2
 
     async def test_button_press_multiple_times(self, coordinator):
         """Test pressing button multiple times doesn't cause errors."""
