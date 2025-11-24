@@ -160,11 +160,18 @@ class AnomalyDetector:
         area_id: str,
         sensor_id: Optional[str],
         timestamp: float,
+        context: str = None,
     ) -> None:
         """Create a warning when motion cannot be explained by adjacency."""
+        message = f"Unexpected motion in {area_id}"
+        if sensor_id:
+            message += f" via {sensor_id}"
+        if context:
+            message += f" ({context})"
+        
         self._create_warning(
             "unexpected_motion",
-            f"Unexpected motion in {area_id}",
+            message,
             area=area_id,
             sensor_id=sensor_id,
             timestamp=timestamp,

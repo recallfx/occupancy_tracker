@@ -17,6 +17,7 @@ from .helpers.map_state_recorder import MapStateRecorder, MapSnapshot
 from .helpers.map_occupancy_resolver import MapOccupancyResolver
 from .helpers.area_state import AreaState
 from .helpers.sensor_state import SensorState
+from .helpers.history_verifier import HistoryVerifier
 from .diagnostics import OccupancyDiagnostics
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,19 +79,15 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         
         sensor = self.sensors[sensor_id]
         sensor_type = sensor.config.get("type", "")
+        area_ids = sensor.config.get("area", [])
+        if isinstance(area_ids, str):
+            area_ids = [area_ids]
         
-        # Add debug logging for motion sensors
-        if sensor_type in ["motion", "camera_motion", "camera_person"]:
-            _LOGGER.debug(
-                f"Motion sensor event: {sensor_id}, state={state}, type={sensor_type}"
-            )
+        # Capture state before processing
+        old_occupancy = {aid: self.areas[aid].occupancy for aid in area_ids if aid in self.areas}
         
         # Update sensor state
         state_changed = sensor.update_state(state, timestamp)
-        
-        # Add more debug logging about the state change result
-        if sensor_type in ["motion", "camera_motion", "camera_person"]:
-            _LOGGER.debug(f"Motion sensor {sensor_id} state_changed={state_changed}")
         
         # Skip processing if state didn't actually change
         if not state_changed:
@@ -108,6 +105,9 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 self.anomaly_detector,
             )
             self._refresh_latest_snapshot_state()
+            
+            # Log detailed state changes
+            self._log_state_change(sensor_id, sensor_type, state, area_ids, old_occupancy, timestamp)
             
             # Check for stuck sensors after processing
             self._check_for_stuck_sensors(sensor_id, timestamp)
@@ -133,6 +133,51 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             self.areas,
             self.sensors,
         )
+    
+    def _log_state_change(
+        self,
+        sensor_id: str,
+        sensor_type: str,
+        state: bool,
+        area_ids: List[str],
+        old_occupancy: Dict[str, int],
+        timestamp: float,
+    ) -> None:
+        """Log detailed state change information."""
+        state_str = "ON" if state else "OFF"
+        
+        # Build occupancy change summary
+        changes = []
+        for area_id in area_ids:
+            if area_id not in self.areas:
+                continue
+            area = self.areas[area_id]
+            old_occ = old_occupancy.get(area_id, 0)
+            new_occ = area.occupancy
+            
+            if old_occ != new_occ:
+                prob = self.get_occupancy_probability(area_id, timestamp)
+                changes.append(f"{area_id}[{old_occ}→{new_occ}, p={prob:.2f}]")
+            elif state and new_occ > 0:
+                # Motion refresh in occupied area
+                prob = self.get_occupancy_probability(area_id, timestamp)
+                changes.append(f"{area_id}[refresh, occ={new_occ}, p={prob:.2f}]")
+        
+        # Check for occupancy changes in adjacent areas (for moves)
+        if changes:
+            for area_id, area in self.areas.items():
+                if area_id not in area_ids:
+                    old_occ = old_occupancy.get(area_id, area.occupancy)
+                    if old_occ != area.occupancy:
+                        prob = self.get_occupancy_probability(area_id, timestamp)
+                        changes.append(f"{area_id}[{old_occ}→{area.occupancy}, p={prob:.2f}]")
+        
+        if changes:
+            _LOGGER.info(
+                f"📍 {sensor_id} → {state_str} | {' | '.join(changes)}"
+            )
+        else:
+            _LOGGER.info(f"📍 {sensor_id} → {state_str} (no occupancy change)")
     
     def _check_for_stuck_sensors(
         self, triggered_sensor_id: str, timestamp: float
@@ -263,6 +308,80 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             self.anomaly_detector,
         )
         self._refresh_latest_snapshot_state()
+    
+    def verify_history(self) -> bool:
+        """
+        Verify that recorded history matches replay (determinism check).
+        
+        This compares the recorded occupancy state against what the current
+        logic produces when replaying the same events. Useful for:
+        - Detecting logic drift after code changes
+        - Verifying bug fixes
+        - Ensuring system determinism
+        
+        Returns:
+            True if history matches replay, False if differences found
+        """
+        history = self.state_recorder.get_history()
+        if not history:
+            _LOGGER.info("No history to verify")
+            return True
+        
+        # Save current state
+        original_areas = {aid: (area.occupancy, area.last_motion) 
+                         for aid, area in self.areas.items()}
+        original_sensors = {sid: (sensor.current_state, sensor.last_changed)
+                           for sid, sensor in self.sensors.items()}
+        
+        try:
+            # Reset and replay
+            for area in self.areas.values():
+                area.occupancy = 0
+                area.last_motion = 0
+                area.activity_history = []
+            
+            for sensor in self.sensors.values():
+                sensor.current_state = False
+                sensor.history = []
+            
+            self.occupancy_resolver.reset()
+            
+            # Replay history
+            self.occupancy_resolver.recalculate_from_history(
+                history,
+                self.areas,
+                self.sensors,
+                None,  # Don't generate new warnings during verification
+            )
+            
+            # Verify
+            verifier = HistoryVerifier()
+            result = verifier.verify_history(
+                history,
+                self.areas,
+                self.sensors,
+            )
+            
+            # Log summary
+            summary = verifier.get_summary()
+            if not result:
+                _LOGGER.error(f"History verification failed: {summary}")
+            else:
+                _LOGGER.info("History verification passed: system is deterministic")
+            
+            return result
+            
+        finally:
+            # Restore original state
+            for aid, (occ, motion) in original_areas.items():
+                if aid in self.areas:
+                    self.areas[aid].occupancy = occ
+                    self.areas[aid].last_motion = motion
+            
+            for sid, (state, changed) in original_sensors.items():
+                if sid in self.sensors:
+                    self.sensors[sid].current_state = state
+                    self.sensors[sid].last_changed = changed
 
     def diagnose_motion_issues(self, sensor_id: str = None) -> Dict[str, Any]:
         """Diagnostic method to help identify why motion isn't being detected."""

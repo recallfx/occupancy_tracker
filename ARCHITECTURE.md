@@ -44,10 +44,21 @@ The system follows a **Coordinator-Helper** pattern, centered around a `DataUpda
   - Generates `Warning` objects for issues
   - Manages warning lifecycle (creation, resolution, clearing)
 
+#### **`HistoryVerifier` (Determinism Checker)**
+- **Location**: `helpers/history_verifier.py`
+- **Role**: Validates system determinism
+- **Responsibilities**:
+  - Compares recorded history against replayed state
+  - Detects logic drift after code changes
+  - Identifies non-deterministic behavior
+  - Provides detailed difference reporting
+  - Supports bug fix verification
+
 #### **State Objects (Data Models)**
 - **`AreaState`**: Individual area state (occupancy count, last motion, activity history)
 - **`SensorState`**: Individual sensor state (current state, reliability, history)
 - **`MapSnapshot`**: Immutable snapshot of system state at a point in time
+- **`StateDifference`**: Represents a mismatch between recorded and replayed state
 
 ## 2. Business Logic & Algorithms
 
@@ -145,10 +156,33 @@ Every event creates a `MapSnapshot` containing:
 2. **Debugging**: Replay history to understand complex race conditions
 3. **Auditing**: Complete audit trail of all state changes
 4. **Testing**: Deterministic replay for integration tests
+5. **Verification**: Validate system determinism via `HistoryVerifier`
 
 #### Implementation
 - `recalculate_from_history`: Replays all snapshots to rebuild state
-- `rebuild_from_history`: Public API in SensorManager
+- `rebuild_from_history`: Public API in Coordinator
+- `verify_history`: Checks if replayed state matches recorded state
+
+### 2.6 History Verification & Determinism
+
+The `HistoryVerifier` ensures the system is deterministic by comparing recorded vs replayed state.
+
+#### How It Works
+1. **Capture**: `MapStateRecorder` records all events and resulting state
+2. **Replay**: `MapOccupancyResolver` processes events again from scratch
+3. **Compare**: `HistoryVerifier` identifies any differences
+4. **Report**: Detailed diff with timestamps and affected areas/sensors
+
+#### Use Cases
+- **Logic Drift Detection**: Verify code changes don't alter behavior
+- **Bug Fix Validation**: Confirm fixes work without breaking other scenarios
+- **CI/CD Integration**: Automated determinism testing
+- **Debug Aid**: Understand when/where behavior diverged
+
+#### API
+- `coordinator.verify_history()`: Quick verification of final state
+- `verifier.verify_all_snapshots()`: Thorough check of every snapshot
+- `verifier.get_summary()`: Statistics on differences found
 
 ## 3. Data Flow
 
@@ -156,19 +190,23 @@ Every event creates a `MapSnapshot` containing:
 
 1. **Event**: Home Assistant fires `state_changed` for `binary_sensor.kitchen_motion`
 2. **Ingest**: `__init__.py:state_change_listener` receives event → `Coordinator.process_sensor_event`
-3. **Validate**: `Coordinator` checks if sensor is known and updates `SensorState`
-4. **Record**: `Coordinator` creates `MapSnapshot` via `MapStateRecorder`
+3. **Validate**: `Coordinator` checks if sensor is known and captures pre-state occupancy
+4. **Update Sensor**: `SensorState.update_state` updates sensor's current state and history
+5. **Record**: `Coordinator` creates `MapSnapshot` via `MapStateRecorder`
    - Captures: Timestamp + Sensor State + Current Area Occupancy
-5. **Resolve**: `MapOccupancyResolver.process_snapshot` analyzes:
+6. **Resolve**: `MapOccupancyResolver.process_snapshot` analyzes:
    - *Is Kitchen adjacent to Living Room?* → Check adjacency map
    - *Is Living Room occupied?* → Check AreaState
    - *Was there recent activity in Living Room?* → Check motion history
    - *Decision*: Move occupant Living Room → Kitchen
    - *Update*: Directly mutates `AreaState` objects (occupancy counts, timestamps)
-6. **Post-Process**: `Coordinator` refreshes snapshot state and checks for stuck sensors
-7. **Notify**: `Coordinator` calls `async_set_updated_data`, triggering HA entity updates
+7. **Log**: `Coordinator._log_state_change` outputs detailed event log with emoji indicators and probability scores
+8. **Post-Process**: `Coordinator` refreshes snapshot state and checks for stuck sensors via `AnomalyDetector`
+9. **Notify**: `Coordinator` calls `async_set_updated_data`, triggering HA entity updates
 
-**Key Simplification**: Reduced from 9 steps to 7 steps by eliminating intermediate manager hops.
+**Logging Format**: `📍 binary_sensor.kitchen_motion → ON | living_room[1→0, p=0.90] | kitchen[0→1, p=1.00]`
+
+**Key Simplification**: Direct state management by Coordinator eliminates intermediate manager layers.
 
 ### 3.2 Timeout Processing Flow
 
@@ -280,6 +318,8 @@ sensors:
 - Motion in non-adjacent area without prior presence
 - System allows occupancy (lights turn on) but flags warning
 - Exit-capable areas exempt from this check
+- Warnings include context about adjacent area activity for easier diagnosis
+- Example: `"Unexpected motion in bedroom (no adjacent activity)"` or `"Unexpected motion in kitchen (recently active: living_room)"`
 
 ## 8. Testing Strategy
 
@@ -287,6 +327,7 @@ sensors:
 - Test individual components in isolation
 - Mock dependencies
 - Fast execution, high coverage
+- History verification tests ensure determinism
 
 ### 8.2 Integration Tests (`tests/integration/`)
 - Test complete system behavior
@@ -294,10 +335,19 @@ sensors:
 - Snapshot replay validation
 - End-to-end event processing
 
-### 8.3 Test Organization
+### 8.3 Interactive Simulation (`simulation/`)
+- Web-based testing environment
+- Visual debugging of occupancy logic
+- History playback with timeline scrubbing
+- Live verification of determinism via UI button
+- Automated scenario testing
+- Real-time state inspection
+
+### 8.4 Test Organization
 - Mirror source code structure
 - Separate unit from integration tests
 - Use pytest markers for categorization
+- Simulation provides manual QA environment
 
 ## 9. Key Files Reference
 
@@ -308,6 +358,7 @@ sensors:
 | `helpers/map_occupancy_resolver.py` | Core transition logic, state machine (stateless) |
 | `helpers/anomaly_detector.py` | Health monitoring, warning generation |
 | `helpers/map_state_recorder.py` | Snapshot recording and history |
+| `helpers/history_verifier.py` | History verification, determinism checking |
 | `helpers/area_state.py` | Individual area state model |
 | `helpers/sensor_state.py` | Individual sensor state model |
 | `helpers/warning.py` | Warning/anomaly data model |
@@ -321,6 +372,8 @@ sensors:
 - Integration with person detection (cameras)
 - Mobile app presence integration
 - Zone-based grouping of areas
+- Continuous integration tests using history verification
+- Automated regression detection via snapshot comparison
 
 ### 10.2 Known Limitations
 - No individual person tracking (by design)
@@ -340,14 +393,17 @@ sensors:
 - `diagnose_motion_issues(sensor_id)`: Analyze why motion isn't detected
 - `get_system_status()`: Full system state dump
 - `get_area_status(area_id)`: Detailed area information
+- `verify_history()`: Check system determinism
 - Snapshot history in `MapStateRecorder`
+- Detailed event logging with emoji indicators (`📍`) and probability scores
 
 ## 12. Philosophy & Design Principles
 
 1. **Preserve Intent**: If someone turns on a light, keep it on until they move elsewhere
 2. **Fail Safe**: Anomalies generate warnings but don't break functionality
-3. **Observable**: Rich diagnostics and history for troubleshooting
-4. **Deterministic**: Same input history always produces same output state
+3. **Observable**: Rich diagnostics, detailed logging, and history for troubleshooting
+4. **Deterministic**: Same input history always produces same output state (verifiable via `HistoryVerifier`)
 5. **Realistic**: Model physical constraints (adjacency, time-of-travel)
 6. **Gradual Confidence**: Use probability decay rather than binary states
 7. **Human-Centric**: Optimize for common human behaviors (sleep, reading, etc.)
+8. **Verifiable**: System behavior can be tested and validated through history replay

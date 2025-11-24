@@ -14,9 +14,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from simulation.sim_coordinator import SimOccupancyCoordinator
 from simulation.layout import build_layout
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging - only show INFO and above
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:%(name)s:%(message)s'
+)
 _LOGGER = logging.getLogger(__name__)
+
+# Move HTTP access logs to DEBUG level
+logging.getLogger('aiohttp.access').setLevel(logging.DEBUG)
 
 def load_config():
     config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -59,7 +65,7 @@ async def websocket_handler(request):
                 if data["type"] == "sensor_event":
                     entity_id = data["entity_id"]
                     state = data["state"]
-                    _LOGGER.info(f"Sensor event: {entity_id} -> {state}")
+                    # Event logged by coordinator with full details
                     coordinator.process_sensor_event(entity_id, state, time.time())
                 elif data["type"] == "reset_warnings":
                     _LOGGER.info("Received request to clear warnings")
@@ -83,6 +89,36 @@ async def websocket_handler(request):
 async def index(request):
     # Serve index.html from the static directory
     return web.FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
+
+async def get_history(request):
+    """Return the full snapshot history."""
+    coordinator = request.app["coordinator"]
+    history = coordinator.state_recorder.get_history()
+    
+    # Convert snapshots to JSON-serializable format
+    history_data = []
+    for snapshot in history:
+        history_data.append({
+            "timestamp": snapshot.timestamp,
+            "event_type": snapshot.event_type,
+            "description": snapshot.description,
+            "areas": snapshot.areas,
+            "sensors": snapshot.sensors,
+        })
+    
+    return web.json_response({"history": history_data})
+
+async def verify_history(request):
+    """Verify that recorded history matches replay (determinism check)."""
+    coordinator = request.app["coordinator"]
+    
+    _LOGGER.info("Verifying history determinism...")
+    result = coordinator.verify_history()
+    
+    return web.json_response({
+        "passed": result,
+        "message": "History verification passed" if result else "History verification failed - see logs"
+    })
 
 async def periodic_check(app):
     coordinator = app["coordinator"]
@@ -116,12 +152,15 @@ def main():
     app["layout"] = layout
     app.router.add_get("/", index)
     app.router.add_get("/ws", websocket_handler)
+    app.router.add_get("/api/history", get_history)
+    app.router.add_post("/api/verify_history", verify_history)
     app.router.add_static("/static", os.path.join(os.path.dirname(__file__), "static"))
     
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
     
-    web.run_app(app, port=8080)
+    # Disable access log by passing None
+    web.run_app(app, port=8123, access_log=None)
 
 if __name__ == "__main__":
     main()

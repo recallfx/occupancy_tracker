@@ -18,6 +18,12 @@
                 <option value="scenario1">Scenario 1: Bedroom Loop</option>
                 <option value="scenario2">Scenario 2: Bathroom Stay</option>
             </select>
+            <button id="historyButton" class="ghost-button" disabled style="margin-right: 10px;">
+                📜 History (<span id="historyCount">0</span>)
+            </button>
+            <button id="verifyHistoryButton" class="ghost-button" disabled style="margin-right: 10px;">
+                ✓ Verify History
+            </button>
             <button id="resetWarningsButton" class="ghost-button" disabled style="margin-right: 10px;">Reset Warnings</button>
             <div id="connectionStatus" class="status-badge">Connecting...</div>
         </div>
@@ -29,6 +35,19 @@
             <div class="legend-item"><div class="dot" style="background: green"></div> Magnetic</div>
             <div class="legend-item"><div class="dot" style="background: purple"></div> Camera</div>
             <div class="legend-item"><div class="dot" style="background: red"></div> Person (Drag me)</div>
+        </div>
+
+        <div class="history-controls" id="historyControls" style="display: none;">
+            <div class="history-header">
+                <span class="section-title">📜 History Playback</span>
+                <button id="exitHistoryButton" class="ghost-button">Exit Replay</button>
+            </div>
+            <div class="slider-container">
+                <button id="historyPlayPause" class="icon-btn" title="Play/Pause">▶️</button>
+                <input type="range" id="historySlider" min="0" max="100" value="0" step="1">
+                <span id="historyInfo" class="history-info">0 / 0</span>
+            </div>
+            <div class="history-timestamp" id="historyTimestamp"></div>
         </div>
 
         <div class="canvas-container">

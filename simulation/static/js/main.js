@@ -1,13 +1,17 @@
 import { render } from './renderer.js';
 import { createInputSystem } from './input.js';
 import { runAutomation } from './automation.js';
+import { HistoryPlayer } from './history.js';
 
 // DOM Elements
 const elements = {
     container: '#sim-container',
     statusBadge: document.getElementById('connectionStatus'),
     resetWarningsButton: document.getElementById('resetWarningsButton'),
-    automationSelect: document.getElementById('automationSelect')
+    automationSelect: document.getElementById('automationSelect'),
+    historyButton: document.getElementById('historyButton'),
+    historyCount: document.getElementById('historyCount'),
+    verifyHistoryButton: document.getElementById('verifyHistoryButton')
 };
 
 const DEFAULT_DIMENSIONS = { width: 600, height: 500 };
@@ -22,6 +26,7 @@ let persons = [
 ];
 let activeSensors = new Set();
 let inputSystem = null;
+let historyPlayer = null;
 
 // WebSocket
 const ws = new WebSocket('ws://' + window.location.host + '/ws');
@@ -30,10 +35,39 @@ ws.onopen = () => {
     elements.statusBadge.textContent = 'Connected';
     elements.statusBadge.className = 'status-badge connected';
     updateWarningControls();
+    updateHistoryButton();
+    
+    // Initialize history player
+    historyPlayer = new HistoryPlayer(ws, (historicalState) => {
+        if (historicalState === null) {
+            // Return to live mode - request fresh state
+            console.log('[History] Exiting history mode, requesting live state');
+            // The next WebSocket message will update us to live state
+            return;
+        }
+        // Show historical state
+        console.log('[History] Showing historical state at', new Date(historicalState.timestamp * 1000));
+        state = historicalState;
+        update();
+    });
 };
 
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
+    console.log('[WS] Received message:', data.type, 'history_count=', data.state?.history_count);
+    
+    // Always update history count, but skip state updates if in history mode
+    if (data.state?.history_count !== undefined) {
+        state.history_count = data.state.history_count;
+        updateHistoryButton();
+    }
+    
+    // Block state updates when viewing history
+    if (historyPlayer && historyPlayer.isInHistoryMode()) {
+        console.log('[WS] Ignoring update - in history mode');
+        return;
+    }
+    
     if (data.type === 'init') {
         updateLayout(data.layout);
         state = data.state;
@@ -48,6 +82,7 @@ ws.onclose = () => {
     elements.statusBadge.textContent = 'Disconnected';
     elements.statusBadge.className = 'status-badge disconnected';
     updateWarningControls();
+    updateHistoryButton();
 };
 
 function sendSensorEvent(entityId, state) {
@@ -90,12 +125,66 @@ function updateWarningControls() {
     }
 }
 
+function updateHistoryButton() {
+    if (!elements.historyCount || !elements.historyButton) return;
+    
+    const historyCount = state.history_count || 0;
+    console.log('[History] Updating button: count=', historyCount, 'canSend=', canSendToServer());
+    elements.historyCount.textContent = historyCount;
+    elements.historyButton.disabled = historyCount === 0 || !canSendToServer();
+    
+    if (elements.verifyHistoryButton) {
+        elements.verifyHistoryButton.disabled = historyCount === 0 || !canSendToServer();
+    }
+}
+
 elements.resetWarningsButton?.addEventListener('click', () => {
     if (!canSendToServer()) {
         return;
     }
     ws.send(JSON.stringify({ type: 'reset_warnings' }));
     elements.resetWarningsButton.disabled = true;
+});
+
+elements.historyButton?.addEventListener('click', () => {
+    if (historyPlayer) {
+        historyPlayer.enterHistoryMode();
+    }
+});
+
+elements.verifyHistoryButton?.addEventListener('click', async () => {
+    if (!canSendToServer()) {
+        return;
+    }
+    
+    elements.verifyHistoryButton.disabled = true;
+    elements.verifyHistoryButton.textContent = '⏳ Verifying...';
+    
+    try {
+        const response = await fetch('/api/verify_history', { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.passed) {
+            elements.verifyHistoryButton.textContent = '✅ Passed!';
+            console.log('✅ History verification passed');
+        } else {
+            elements.verifyHistoryButton.textContent = '❌ Failed';
+            console.error('❌ History verification failed - check server logs');
+        }
+        
+        // Reset button after 3 seconds
+        setTimeout(() => {
+            elements.verifyHistoryButton.textContent = '✓ Verify History';
+            elements.verifyHistoryButton.disabled = state.history_count === 0;
+        }, 3000);
+    } catch (err) {
+        console.error('Error verifying history:', err);
+        elements.verifyHistoryButton.textContent = '❌ Error';
+        setTimeout(() => {
+            elements.verifyHistoryButton.textContent = '✓ Verify History';
+            elements.verifyHistoryButton.disabled = state.history_count === 0;
+        }, 3000);
+    }
 });
 
 if (elements.automationSelect) {

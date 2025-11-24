@@ -72,6 +72,9 @@ class MapOccupancyResolver:
         sensor_type = sensor.config.get("type", "")
         timestamp = snapshot.timestamp
 
+        # Update sensor state to match snapshot
+        sensor.update_state(new_state, timestamp)
+
         if sensor_type in self.MOTION_SENSOR_TYPES:
             if new_state:
                 self._handle_motion_on(
@@ -149,18 +152,27 @@ class MapOccupancyResolver:
                 continue
 
             if outcome == TransitionOutcome.MOVED_FROM_NEIGHBOR and source_id:
+                _LOGGER.debug(
+                    f"Movement detected: {source_id} → {area_id} (via {sensor.id})"
+                )
                 areas[source_id].record_exit(timestamp)
                 area.record_entry(timestamp)
                 continue
 
             if outcome == TransitionOutcome.ENTERED_FROM_OUTSIDE:
+                _LOGGER.debug(
+                    f"Entry from outside: → {area_id} (via {sensor.id}, exit-capable)"
+                )
                 area.record_entry(timestamp)
                 continue
 
             # Invalid transitions still count as entries to keep the
             # system responsive, but we surface them to the anomaly detector.
+            _LOGGER.debug(
+                f"⚠️  Unexpected motion: {area_id} (via {sensor.id}, no valid source)"
+            )
             area.record_entry(timestamp)
-            self._report_anomaly(area, sensor, timestamp, anomaly_detector)
+            self._report_anomaly(area, sensor, timestamp, areas, anomaly_detector)
 
     def _handle_motion_off(self, sensor: SensorState, timestamp: float) -> None:
         area_ids = self._normalize_area_ids(sensor.config.get("area"))
@@ -231,13 +243,24 @@ class MapOccupancyResolver:
         area: AreaState,
         sensor: SensorState,
         timestamp: float,
+        areas: Dict[str, AreaState],
         anomaly_detector: Optional[AnomalyDetector],
     ) -> None:
+        # Build context about why this is unexpected
+        neighbors = self.adjacency_map.get(area.id, [])
+        recently_active = []
+        for nid in neighbors:
+            neighbor = areas.get(nid)
+            if neighbor and neighbor.last_motion > 0 and (timestamp - neighbor.last_motion) < self.ADJACENT_ACTIVITY_WINDOW:
+                recently_active.append(nid)
+        
+        context = f"no adjacent activity" if not recently_active else f"recently active: {', '.join(recently_active)}"
+        
         _LOGGER.debug(
-            "Unexpected activation in %s from sensor %s", area.id, sensor.id
+            "Unexpected activation in %s from sensor %s (%s)", area.id, sensor.id, context
         )
         if anomaly_detector:
-            anomaly_detector.record_unexpected_activation(area.id, sensor.id, timestamp)
+            anomaly_detector.record_unexpected_activation(area.id, sensor.id, timestamp, context)
 
     def _find_source_area(
         self,
