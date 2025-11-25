@@ -51,3 +51,10 @@ class SensorState:
         self.is_stuck = False
         return False
 
+    def reset(self) -> None:
+        """Reset sensor state to initial values."""
+        self.current_state = False
+        self.history = []
+        self.is_reliable = True
+        self.is_stuck = False
+

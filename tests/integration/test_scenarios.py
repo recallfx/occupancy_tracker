@@ -155,23 +155,29 @@ class TestMultiOccupant:
         
         E+@ -> L+@ -> (P1) B1+@, (P2) K+@
         Final: B1@=1, K@=1
+        
+        Note: Both people must pass through living_room since:
+        - bedroom_1 is adjacent to living_room
+        - kitchen is adjacent to living_room
         """
         coordinator = hass_with_multi_occupant_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Both start from entrance -> living
+        # P1 enters from entrance -> living
         helper.trigger_motion("binary_sensor.motion_entrance")
         helper.trigger_motion("binary_sensor.motion_living", delay=2)
 
         # P2 enters via entrance (second person)
         helper.trigger_motion("binary_sensor.motion_entrance", delay=1)
-        helper.advance_time(2)
+        
+        # P2 moves to living (P1 is still there, so living will have 2)
+        helper.trigger_motion("binary_sensor.motion_living", delay=2)
 
         # P1 -> bedroom_1
         helper.trigger_motion("binary_sensor.motion_bedroom_1", delay=2)
 
         # P2 -> kitchen
-        helper.trigger_motion("binary_sensor.motion_kitchen", delay=1)
+        helper.trigger_motion("binary_sensor.motion_kitchen", delay=2)
 
         assert coordinator.get_occupancy("bedroom_1") >= 1
         assert coordinator.get_occupancy("kitchen") >= 1

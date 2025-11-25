@@ -412,3 +412,310 @@ class TestEdgeCases:
             assert coordinator.get_occupancy("area_c") == 1
             assert coordinator.get_occupancy("area_b") == 0
             assert coordinator.get_occupancy("area_a") == 0
+
+
+class TestSensorTimingVariations:
+    """
+    Test various real-world sensor timing scenarios.
+    
+    Real PIR sensors don't turn off exactly when a person leaves.
+    They have configurable timeouts, can be obscured by furniture,
+    and sometimes overlap when a person is between two zones.
+    """
+
+    async def test_sensor_stays_on_long_after_person_leaves(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Person moves A->B, but A's sensor stays on for 30s after.
+        
+        Many PIR sensors have 30s-60s timeout. The person might be long gone
+        from A when A's sensor finally turns off.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Person moves to B while A still active
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=3)
+        
+        # Movement should be recognized immediately
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1
+
+        # B turns off (person stopped moving in B)
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=5)
+        
+        # Person still in B, even though B sensor is off
+        assert coordinator.get_occupancy("area_b") == 1
+
+        # A finally turns off after long timeout (30s later)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=30)
+        
+        # This should NOT move person back to A!
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1
+
+    async def test_sensor_turns_off_before_person_leaves(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Person is in A, but sensor goes dark (behind furniture).
+        Then person moves to B.
+        
+        The A sensor might have been off for a while before B activates.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # A turns off (person sat behind sofa, out of sensor view)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=2)
+        
+        # Person still in A (just not visible to sensor)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Much later, person finally moves to B
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=60)
+        
+        # Should recognize this as movement from A
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1
+
+    async def test_both_sensors_on_during_transition(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Person walks from A to B, both sensors see them.
+        
+        A activates, then B activates, then A deactivates, then B deactivates.
+        This is common when walking through a doorway.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Person walks toward B - B sees them while A still sees them
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        
+        # Movement recognized
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1
+
+        # A finally stops seeing them
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
+        
+        # Still in B
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1
+
+        # B stops seeing them (person stopped moving)
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=3)
+        
+        # Still in B
+        assert coordinator.get_occupancy("area_b") == 1
+
+    async def test_sensor_false_trigger_in_adjacent_empty_room(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Person in C, but B sensor triggers briefly (pet, shadow, etc.)
+        
+        Since B is adjacent to occupied C, the system will interpret this as
+        movement from C to B. This is expected behavior - we can't distinguish
+        pets from humans with motion sensors alone.
+        
+        In practice, when the person moves again in C, they'll trigger C's
+        sensor and the state will correct itself.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters and goes to C
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        helper.trigger_sensor("binary_sensor.motion_a", False)
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
+        helper.trigger_sensor("binary_sensor.motion_b", False)
+        helper.trigger_sensor("binary_sensor.motion_c", False)
+        
+        assert coordinator.get_occupancy("area_c") == 1
+
+        # Long pause - person is settled in C
+        helper.advance_time(300)  # 5 minutes
+        
+        # B has a false trigger (pet walked through)
+        helper.trigger_sensor("binary_sensor.motion_b", True)
+        
+        # System interprets this as movement from C to B
+        # (we can't distinguish pet from human with motion sensors)
+        assert coordinator.get_occupancy("area_b") == 1
+        assert coordinator.get_occupancy("area_c") == 0
+
+        # B turns off
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=5)
+        
+        # Person is now tracked in B (incorrectly, but will self-correct)
+        assert coordinator.get_occupancy("area_b") == 1
+
+        # When the actual person moves in C, state self-corrects
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=10)
+        
+        # Person moves "back" to C (in reality they never left)
+        assert coordinator.get_occupancy("area_c") == 1
+        assert coordinator.get_occupancy("area_b") == 0
+
+    async def test_two_sensors_in_sequence_fast_walkthrough(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Person walks A->B->C quickly, sensors fire in rapid succession.
+        
+        All three might be on simultaneously at some point.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Quick walk: B activates while A still on
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=1)
+        assert coordinator.get_occupancy("area_b") == 1
+        assert coordinator.get_occupancy("area_a") == 0
+
+        # Even quicker: C activates while A and B still on
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=1)
+        assert coordinator.get_occupancy("area_c") == 1
+        assert coordinator.get_occupancy("area_b") == 0
+
+        # Sensors turn off in order they were triggered
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=1)
+        helper.trigger_sensor("binary_sensor.motion_c", False, delay=1)
+        
+        # Person ended up in C
+        assert coordinator.get_occupancy("area_c") == 1
+        assert coordinator.get_occupancy("area_b") == 0
+        assert coordinator.get_occupancy("area_a") == 0
+
+    async def test_sensor_off_on_off_flicker(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Sensor flickers off-on-off quickly (common with some PIRs).
+        
+        This should not cause any occupancy changes.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Sensor flickers off briefly
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.5)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Sensor comes back on
+        helper.trigger_sensor("binary_sensor.motion_a", True, delay=0.3)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Normal off
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=5)
+        assert coordinator.get_occupancy("area_a") == 1
+
+    async def test_multi_person_with_overlapping_sensors(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Two people, sensors overlap.
+        
+        Person 1 goes A->B->C.
+        Person 2 enters A while person 1 is in B (both B sensors might trigger).
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person 1 enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Person 1 moves to B, A stays on briefly
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        assert coordinator.get_occupancy("area_b") == 1
+        assert coordinator.get_occupancy("area_a") == 0
+
+        # A turns off
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
+
+        # Person 2 enters at A while person 1 still in B
+        helper.trigger_sensor("binary_sensor.motion_a", True, delay=2)
+        
+        # Both should be tracked
+        assert coordinator.get_occupancy("area_a") == 1, "Person 2 should be in A"
+        assert coordinator.get_occupancy("area_b") == 1, "Person 1 should still be in B"
+
+        # Person 1 moves to C
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
+        assert coordinator.get_occupancy("area_c") == 1
+
+        # B turns off
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=1)
+
+        # Person 2 also moves to B (A->B)
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
+        
+        assert coordinator.get_occupancy("area_a") == 0
+        assert coordinator.get_occupancy("area_b") == 1, "Person 2 should be in B"
+        assert coordinator.get_occupancy("area_c") == 1, "Person 1 should be in C"
+
+    async def test_delayed_sensor_no_immediate_off(
+        self, hass_with_linear_config: HomeAssistant
+    ):
+        """
+        Scenario: Journey A->B->C, but sensors have long timeouts.
+        
+        A stays on long after person left.
+        B stays on long after person left.
+        This is typical for PIR with 30s-60s timeout.
+        """
+        coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # Person enters at A
+        helper.trigger_sensor("binary_sensor.motion_a", True)
+        assert coordinator.get_occupancy("area_a") == 1
+
+        # Person moves to B (A stays on)
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=3)
+        assert coordinator.get_occupancy("area_b") == 1
+        assert coordinator.get_occupancy("area_a") == 0
+
+        # Person moves to C (A and B both still on!)
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=3)
+        assert coordinator.get_occupancy("area_c") == 1
+        assert coordinator.get_occupancy("area_b") == 0
+        assert coordinator.get_occupancy("area_a") == 0
+
+        # Now sensors time out in random order
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=10)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=5)
+        helper.trigger_sensor("binary_sensor.motion_c", False, delay=15)
+        
+        # Person should still be in C
+        assert coordinator.get_occupancy("area_c") == 1
+        assert coordinator.get_occupancy("area_b") == 0
+        assert coordinator.get_occupancy("area_a") == 0

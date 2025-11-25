@@ -40,6 +40,15 @@ class AreaState:
         
         if target_id:
             self.last_exit_to[target_id] = timestamp
+        
+        # Clean up old exit records (older than 5 minutes)
+        OLD_EXIT_THRESHOLD = 300  # 5 minutes
+        stale_keys = [
+            k for k, v in self.last_exit_to.items() 
+            if (timestamp - v) > OLD_EXIT_THRESHOLD
+        ]
+        for k in stale_keys:
+            del self.last_exit_to[k]
             
         return True
 
@@ -53,6 +62,13 @@ class AreaState:
             return False
         return (timestamp - self.last_motion) <= within_seconds
 
+    def reset(self) -> None:
+        """Reset area state to initial values."""
+        self.occupancy = 0
+        self.last_motion = 0
+        self.activity_history = []
+        self.last_exit_to = {}
+    
     @property
     def is_occupied(self) -> bool:
         """Whether this area currently has one or more occupants."""

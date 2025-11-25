@@ -87,3 +87,42 @@ class TestMaskedMovement:
         assert coordinator.get_occupancy("back_hall") == 1, "B should have P2"
         assert coordinator.get_occupancy("front_hall") == 1, "F should have P1"
         assert coordinator.get_occupancy("entrance") == 0, "E should be empty"
+
+    async def test_masked_movement_same_destination(self, hass_with_realistic_config: HomeAssistant):
+        """
+        P1 moves to F and stays (sensor ON). P2 also goes to F (masked movement).
+        
+        When P2's entrance sensor turns OFF, we detect masked movement because:
+        - Entrance is occupied (P2)
+        - Front_hall is adjacent, active, AND already occupied (P1)
+        
+        Expected: F@=2 (both people in front_hall)
+        """
+        coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
+        helper = SensorEventHelper(coordinator)
+
+        # P1 arrives and goes to front_hall
+        helper.trigger_sensor("binary_sensor.person_front_left_camera", True)
+        helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=0.5)
+        helper.trigger_sensor("binary_sensor.motion_entrance", True, delay=0.5)
+        helper.trigger_sensor("binary_sensor.magnetic_entry", False, delay=0.3)
+        helper.trigger_sensor("binary_sensor.motion_front_hall", True, delay=1)
+        helper.trigger_sensor("binary_sensor.person_front_left_camera", False)
+        helper.trigger_sensor("binary_sensor.motion_entrance", False)
+        
+        assert coordinator.get_occupancy("front_hall") == 1, "P1 should be in F"
+
+        # P2 arrives (F sensor still ON from P1)
+        helper.trigger_sensor("binary_sensor.person_front_left_camera", True, delay=5)
+        helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=0.5)
+        helper.trigger_sensor("binary_sensor.motion_entrance", True, delay=0.5)
+        helper.trigger_sensor("binary_sensor.magnetic_entry", False, delay=0.3)
+        
+        # P2 walks to F (masked - sensor already ON)
+        # When entrance sensor turns OFF, P2 should move to F
+        helper.trigger_sensor("binary_sensor.person_front_left_camera", False, delay=1)
+        helper.trigger_sensor("binary_sensor.motion_entrance", False, delay=1)
+        
+        # Both should be in front_hall now
+        assert coordinator.get_occupancy("front_hall") == 2, "F should have both P1 and P2"
+        assert coordinator.get_occupancy("entrance") == 0, "E should be empty"

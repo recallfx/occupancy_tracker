@@ -138,7 +138,7 @@ def multi_occupant_config() -> dict[str, Any]:
     return {
         DOMAIN: {
             "areas": {
-                "entrance": {"name": "Entrance"},
+                "entrance": {"name": "Entrance", "exit_capable": True},
                 "living_room": {"name": "Living Room"},
                 "kitchen": {"name": "Kitchen"},
                 "bedroom_1": {"name": "Bedroom 1"},

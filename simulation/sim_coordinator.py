@@ -13,6 +13,7 @@ from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSt
 from custom_components.occupancy_tracker.helpers.map_occupancy_resolver import MapOccupancyResolver
 from custom_components.occupancy_tracker.helpers.area_state import AreaState
 from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
+from custom_components.occupancy_tracker.helpers.log_formatter import LogFormatter
 from custom_components.occupancy_tracker.diagnostics import OccupancyDiagnostics
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         self.anomaly_detector = AnomalyDetector(config)
         self.state_recorder = MapStateRecorder()
         self.occupancy_resolver = MapOccupancyResolver(config)
+        self.log_formatter = LogFormatter(self.areas, self.sensors)
         self.diagnostics = OccupancyDiagnostics(self)
         self.data = self.get_simulation_state()
     

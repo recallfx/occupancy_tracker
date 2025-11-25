@@ -107,6 +107,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         async_track_state_change_event(hass, sensor_entities, state_change_listener)
 
     # Set up periodic check for timeouts (every 60 seconds)
+    # Note: The coordinator also has a 5-second update_interval for consistency checks.
+    # This 60-second check is specifically for longer-term anomalies.
     async def interval_listener(now) -> None:
         """Handle periodic checks."""
         coordinator.check_timeouts(timestamp=now.timestamp())
@@ -119,6 +121,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     
     async def _cleanup_timer(event):
         remove_interval()
+        # Also stop the coordinator's periodic updates
+        await coordinator.async_shutdown()
         
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _cleanup_timer)
 
