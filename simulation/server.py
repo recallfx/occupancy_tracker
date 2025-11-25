@@ -16,13 +16,13 @@ from simulation.layout import build_layout
 
 # Configure logging - only show INFO and above
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(levelname)s:%(name)s:%(message)s'
 )
 _LOGGER = logging.getLogger(__name__)
 
-# Move HTTP access logs to DEBUG level
-logging.getLogger('aiohttp.access').setLevel(logging.DEBUG)
+# Move HTTP access logs to WARNING level to reduce noise
+logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
 # WebSocket clients for broadcasting logs
 ws_clients = set()

@@ -83,30 +83,42 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if isinstance(area_ids, str):
             area_ids = [area_ids]
         
-        # Capture state before processing
-        old_occupancy = {aid: self.areas[aid].occupancy for aid in area_ids if aid in self.areas}
+        # Capture state before processing (all areas, not just linked ones)
+        old_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
         
         # Update sensor state
         state_changed = sensor.update_state(state, timestamp)
         
-        # Skip processing if state didn't actually change
-        if not state_changed:
+        # Skip processing if state didn't actually change, unless it's an ON event (keep-alive)
+        # We want to process repeated ON events to update last_motion and confirm presence
+        if not state_changed and not state:
             return
         
         # Record snapshot
         snapshot = self._record_snapshot(sensor_id, state, timestamp)
         
-        # Process snapshot through the resolver
+            # Process snapshot through the resolver
         if snapshot:
-            self.occupancy_resolver.process_snapshot(
+            recent_move_target_id = self.occupancy_resolver.process_snapshot(
                 snapshot,
                 self.areas,
                 self.sensors,
                 self.anomaly_detector,
             )
-            self._refresh_latest_snapshot_state()
             
-            # Log detailed state changes
+            # Check for consistency (Refill active empty areas)
+            # Loop up to 3 times to propagate changes (e.g. Outside -> Entrance -> Living)
+            for _ in range(3):
+                if not self.occupancy_resolver.resolve_consistency(
+                    self.areas,
+                    self.sensors,
+                    timestamp,
+                    self.anomaly_detector,
+                    recent_move_target_id=recent_move_target_id
+                ):
+                    break
+
+            self._refresh_latest_snapshot_state()            # Log detailed state changes
             self._log_state_change(sensor_id, sensor_type, state, area_ids, old_occupancy, timestamp)
             
             # Check for stuck sensors after processing
@@ -148,6 +160,8 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         
         # Build occupancy change summary
         changes = []
+        
+        # First, check directly linked areas
         for area_id in area_ids:
             if area_id not in self.areas:
                 continue
@@ -163,14 +177,13 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 prob = self.get_occupancy_probability(area_id, timestamp)
                 changes.append(f"{area_id}[refresh, occ={new_occ}, p={prob:.2f}]")
         
-        # Check for occupancy changes in adjacent areas (for moves)
-        if changes:
-            for area_id, area in self.areas.items():
-                if area_id not in area_ids:
-                    old_occ = old_occupancy.get(area_id, area.occupancy)
-                    if old_occ != area.occupancy:
-                        prob = self.get_occupancy_probability(area_id, timestamp)
-                        changes.append(f"{area_id}[{old_occ}→{area.occupancy}, p={prob:.2f}]")
+        # Then check ALL other areas for occupancy changes (e.g., exits during moves)
+        for area_id, area in self.areas.items():
+            if area_id not in area_ids:
+                old_occ = old_occupancy.get(area_id, 0)
+                if old_occ != area.occupancy:
+                    prob = self.get_occupancy_probability(area_id, timestamp)
+                    changes.append(f"{area_id}[{old_occ}→{area.occupancy}, p={prob:.2f}]")
         
         if changes:
             _LOGGER.info(

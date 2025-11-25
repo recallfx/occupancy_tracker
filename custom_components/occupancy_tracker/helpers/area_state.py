@@ -13,6 +13,7 @@ class AreaState:
         self.activity_history = []  # List of (timestamp, activity_type) tuples
         self.is_indoors = area_config.get("indoors", True)
         self.is_exit_capable = area_config.get("exit_capable", False)
+        self.last_exit_to: dict[str, float] = {}  # Map of target_area_id -> timestamp
 
     def record_motion(self, timestamp: float) -> None:
         """Record motion activity in this area."""
@@ -28,7 +29,7 @@ class AreaState:
         if len(self.activity_history) > MAX_HISTORY_LENGTH:
             self.activity_history.pop(0)
 
-    def record_exit(self, timestamp: float) -> bool:
+    def record_exit(self, timestamp: float, target_id: str = None) -> bool:
         """Record exit from this area. Returns False if no occupancy to decrement."""
         if self.occupancy <= 0:
             return False
@@ -36,6 +37,10 @@ class AreaState:
         self.activity_history.append((timestamp, "exit"))
         if len(self.activity_history) > MAX_HISTORY_LENGTH:
             self.activity_history.pop(0)
+        
+        if target_id:
+            self.last_exit_to[target_id] = timestamp
+            
         return True
 
     def get_inactivity_duration(self, timestamp: float) -> float:

@@ -1,7 +1,13 @@
-"""Multi-sensor coordination integration tests.
+"""
+Multi-sensor coordination integration tests.
 
-These tests verify that different sensor types work together correctly,
-including bridging sensors (magnetic), camera sensors, and motion sensors.
+Notation:
+- Areas: Y=Frontyard, E=Entrance, B=Backyard (realistic); K=Kitchen, R=Bedroom, L=Living (simple)
+- Motion: + = active
+- Occupancy: @ = occupied  
+- Door: | = closed, / = open
+
+Sensor types tested: motion, magnetic (door), camera (person/motion detection)
 """
 
 from __future__ import annotations
@@ -20,44 +26,48 @@ class TestBridgingSensors:
     async def test_magnetic_door_transition(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test door sensor triggering transition between areas."""
+        """
+        Door sensor triggers transition between areas.
+        
+        E+@ -> E+@/B -> E/B+@ (terrace door opens, person moves to backyard)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Person in entrance
+        # E+@ - person in entrance
         helper.trigger_motion("binary_sensor.motion_entrance")
         assert coordinator.get_occupancy("entrance") >= 1
 
-        # Open terrace door (bridges entrance and backyard)
+        # E+@/B - terrace door opens
         helper.trigger_sensor("binary_sensor.magnetic_terrace", True, delay=2.0)
 
-        # Motion in backyard
+        # E/B+@ - motion in backyard
         helper.trigger_motion("binary_sensor.motion_back_left_camera", delay=1.0)
-
-        # Should have transitioned to backyard
         assert coordinator.get_occupancy("backyard") >= 1
 
     async def test_multiple_door_crossings(
         self, hass_with_simple_config: HomeAssistant
     ):
-        """Test multiple door crossings between rooms."""
+        """
+        Multiple door crossings between rooms.
+        
+        K+@ -> K+@/R -> K/R+@ -> K|R+@ -> K/R+@ -> K+@/R
+        """
         coordinator = hass_with_simple_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Person in kitchen
+        # K+@ - person in kitchen
         helper.trigger_motion("binary_sensor.motion_kitchen")
 
-        # Cross door to bedroom multiple times
+        # K+@/R -> K/R+@ - cross to bedroom
         helper.trigger_sensor("binary_sensor.door_kitchen_bedroom", True, delay=2)
         helper.trigger_motion("binary_sensor.motion_bedroom", delay=1)
         helper.trigger_sensor("binary_sensor.door_kitchen_bedroom", False, delay=2)
 
-        # Back to kitchen
+        # K/R+@ -> K+@/R - back to kitchen
         helper.trigger_sensor("binary_sensor.door_kitchen_bedroom", True, delay=2)
         helper.trigger_motion("binary_sensor.motion_kitchen", delay=1)
 
-        # System should handle door crossings
-        # Occupancy depends on movement tracking
         total_occupancy = (
             coordinator.get_occupancy("kitchen") + 
             coordinator.get_occupancy("bedroom")
@@ -67,19 +77,21 @@ class TestBridgingSensors:
     async def test_door_with_simultaneous_motion_both_sides(
         self, hass_with_simple_config: HomeAssistant
     ):
-        """Test door sensor with motion on both sides simultaneously."""
+        """
+        Door sensor with motion on both sides (ambiguous scenario).
+        
+        K+@R+@ -> K+@/R+@ (door opens while both rooms have motion)
+        """
         coordinator = hass_with_simple_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Motion on both sides of door at nearly the same time
+        # K+@R+@ - motion on both sides near-simultaneously
         helper.trigger_motion("binary_sensor.motion_kitchen")
         helper.trigger_motion("binary_sensor.motion_bedroom", delay=0.5)
 
-        # Door opens
+        # K+@/R+@ - door opens
         helper.trigger_sensor("binary_sensor.door_kitchen_bedroom", True, delay=1)
 
-        # System should handle ambiguous scenarios
-        # May interpret as one or two people
         total_occupancy = (
             coordinator.get_occupancy("kitchen") +
             coordinator.get_occupancy("bedroom")
@@ -94,45 +106,53 @@ class TestCameraCoordination:
     async def test_camera_person_followed_by_motion(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test camera person detection followed by area motion sensor."""
+        """
+        Camera person detection followed by area motion sensor.
+        
+        Y+@ -> Y+@/E -> Y/E+@ (person detected outside, enters through door)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Camera detects person in frontyard
+        # Y+@ - camera detects person in frontyard
         helper.trigger_sensor("binary_sensor.person_front_left_camera", True)
         assert coordinator.get_occupancy("frontyard") >= 1
 
-        # Person enters through door
+        # Y+@/E -> Y/E+@ - enters through door
         helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=2.0)
         helper.trigger_motion("binary_sensor.motion_entrance", delay=1.0)
-
-        # Should have transitioned to entrance
         assert coordinator.get_occupancy("entrance") >= 1
 
     async def test_camera_motion_without_person_detection(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test camera motion without person detection (e.g., animal, vehicle)."""
+        """
+        Camera motion without person detection (animal, vehicle, etc).
+        
+        B+ (motion only, no person detection)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Camera motion in backyard without person
+        # B+ - camera motion in backyard without person
         helper.trigger_sensor("binary_sensor.motion_back_left_camera", True)
 
-        # Should register motion but with appropriate handling
-        # (May or may not create occupancy depending on implementation)
-        # Just verify no crashes and state is trackable
+        # Should register motion but handling depends on implementation
         status = coordinator.get_area_status("backyard")
         assert status is not None
 
     async def test_simultaneous_camera_person_and_motion(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test camera person and motion sensors triggering together."""
+        """
+        Camera person and motion sensors triggering together.
+        
+        Y+@ (both person detection and motion at same instant)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Both camera person and motion detect simultaneously
+        # Y+@ - both camera person and motion simultaneously
         timestamp = helper.current_time
         coordinator.process_sensor_event(
             "binary_sensor.person_front_left_camera", True, timestamp
@@ -140,8 +160,6 @@ class TestCameraCoordination:
         coordinator.process_sensor_event(
             "binary_sensor.motion_front_left_camera", True, timestamp
         )
-
-        # Should have occupancy in frontyard
         assert coordinator.get_occupancy("frontyard") >= 1
 
 
@@ -152,11 +170,15 @@ class TestSensorTimingInteractions:
     async def test_rapid_sequential_sensor_activations(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test sensors activating in very rapid succession (< 1 second apart)."""
+        """
+        Sensors activating in rapid succession (< 1 second apart).
+        
+        E+ -> E+F+ -> E+F+B+ -> E+F+B+M+ (0.3s intervals - running through house)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Rapid sequence through connected rooms (0.3s intervals)
+        # Rapid sequence: E+ -> F+ -> B+ -> M+ (0.3s intervals)
         base_time = helper.current_time
         coordinator.process_sensor_event(
             "binary_sensor.motion_entrance", True, base_time
@@ -171,98 +193,66 @@ class TestSensorTimingInteractions:
             "binary_sensor.motion_main_bedroom", True, base_time + 0.9
         )
 
-        # All should register the motion
-        assert (
-            coordinator.areas["entrance"].last_motion ==pytest.approx(
-                base_time, abs=0.01
-            )
+        assert coordinator.areas["entrance"].last_motion == pytest.approx(
+            base_time, abs=0.01
         )
-        assert (
-            coordinator.areas["main_bedroom"].last_motion
-            == pytest.approx(base_time + 0.9, abs=0.01)
+        assert coordinator.areas["main_bedroom"].last_motion == pytest.approx(
+            base_time + 0.9, abs=0.01
         )
 
     async def test_overlapping_sensor_activations(
         self, hass_with_simple_config: HomeAssistant
     ):
-        """Test overlapping sensor activations (sensors ON at same time)."""
+        """
+        Overlapping sensor activations (multiple sensors ON simultaneously).
+        
+        L+ -> L+K+ -> L+K+R+ (all ON) -> L+K+R -> L+K -> L (turn off in reverse)
+        """
         coordinator = hass_with_simple_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Turn on multiple sensors
+        # L+K+R+ - turn on all three
         helper.trigger_sensor("binary_sensor.motion_living", True)
         helper.trigger_sensor("binary_sensor.motion_kitchen", True, delay=1.0)
         helper.trigger_sensor("binary_sensor.motion_bedroom", True, delay=1.0)
 
-        # All three are ON simultaneously
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_living"
-            ].current_state
-            is True
-        )
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_kitchen"
-            ].current_state
-            is True
-        )
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_bedroom"
-            ].current_state
-            is True
-        )
+        # Verify all ON
+        assert coordinator.sensors["binary_sensor.motion_living"].current_state is True
+        assert coordinator.sensors["binary_sensor.motion_kitchen"].current_state is True
+        assert coordinator.sensors["binary_sensor.motion_bedroom"].current_state is True
 
-        # Turn them off in different order
+        # Turn off in different order: R -> L -> K
         helper.trigger_sensor("binary_sensor.motion_bedroom", False, delay=2.0)
         helper.trigger_sensor("binary_sensor.motion_living", False, delay=1.0)
         helper.trigger_sensor("binary_sensor.motion_kitchen", False, delay=1.0)
 
-        # All should be off
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_living"
-            ].current_state
-            is False
-        )
+        assert coordinator.sensors["binary_sensor.motion_living"].current_state is False
 
     async def test_delayed_sensor_clearing(
         self, hass_with_simple_config: HomeAssistant
     ):
-        """Test sensors with different clearing times."""
+        """
+        Sensors with different clearing times.
+        
+        L+ -> L+K+ -> LK+ (L clears quickly, K stays on longer)
+        """
         coordinator = hass_with_simple_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Trigger living room motion
+        # L+K+ - both on
         helper.trigger_sensor("binary_sensor.motion_living", True)
-
-        # Trigger kitchen motion shortly after
         helper.trigger_sensor("binary_sensor.motion_kitchen", True, delay=2.0)
 
-        # Living room clears quickly
+        # LK+ - living clears quickly
         helper.trigger_sensor("binary_sensor.motion_living", False, delay=3.0)
 
-        # Kitchen stays on longer
+        # K stays on for 10s more
         helper.advance_time(10.0)
+        assert coordinator.sensors["binary_sensor.motion_kitchen"].current_state is True
 
-        # Kitchen should still be on
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_kitchen"
-            ].current_state
-            is True
-        )
-
-        # Now clear kitchen
+        # K clears
         helper.trigger_sensor("binary_sensor.motion_kitchen", False)
-
-        assert (
-            coordinator.sensors[
-                "binary_sensor.motion_kitchen"
-            ].current_state
-            is False
-        )
+        assert coordinator.sensors["binary_sensor.motion_kitchen"].current_state is False
 
 
 @pytest.mark.multi_sensor
@@ -272,48 +262,54 @@ class TestMultiAreaSensors:
     async def test_magnetic_sensor_bidirectional(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test magnetic sensor works in both directions."""
+        """
+        Magnetic sensor works in both directions.
+        
+        Direction 1: E+@ -> E+@/Y -> E/Y+@ (exit to frontyard)
+        Direction 2: Y+@ -> Y+@/E -> Y/E+@ (enter from frontyard)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Direction 1: entrance -> frontyard
+        # Direction 1: E+@ -> E+@/Y -> E/Y+@
         helper.trigger_motion("binary_sensor.motion_entrance")
         helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=1.0)
         helper.trigger_sensor("binary_sensor.person_front_left_camera", True, delay=1.0)
-
         assert coordinator.get_occupancy("frontyard") >= 1
 
         # Wait and clear frontyard
         helper.advance_time(301.0)
         helper.check_timeouts()
+        helper.trigger_sensor("binary_sensor.person_front_left_camera", False)
 
-        # Direction 2: frontyard -> entrance (coming back)
+        # Direction 2: Y+@ -> Y+@/E -> Y/E+@
         helper.trigger_sensor("binary_sensor.person_front_left_camera", True)
         helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=1.0)
         helper.trigger_motion("binary_sensor.motion_entrance", delay=1.0)
-
         assert coordinator.get_occupancy("entrance") >= 1
 
     async def test_multiple_bridging_sensors_in_sequence(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test using multiple bridging sensors in a journey."""
+        """
+        Multiple bridging sensors in a journey.
+        
+        E+@ -> E+@/B -> E/B+@ (terrace door) -> B+@/E -> B/E+@ (entry door)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Start in entrance
+        # E+@ - start in entrance
         helper.trigger_motion("binary_sensor.motion_entrance")
 
-        # Use terrace door to backyard
+        # E+@/B -> E/B+@ - terrace door to backyard
         helper.trigger_sensor("binary_sensor.magnetic_terrace", True, delay=2.0)
         helper.trigger_motion("binary_sensor.motion_back_left_camera", delay=1.0)
-
         assert coordinator.get_occupancy("backyard") >= 1
 
-        # Use entry door back to entrance
+        # B+@/E -> B/E+@ - entry door back to entrance
         helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=3.0)
         helper.trigger_motion("binary_sensor.motion_entrance", delay=1.0)
-
         assert coordinator.get_occupancy("entrance") >= 1
 
 
@@ -324,46 +320,45 @@ class TestSensorTypeCombinations:
     async def test_motion_to_magnetic_to_camera(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test journey using motion -> magnetic -> camera sensors."""
+        """
+        Journey using motion -> magnetic -> camera sensors.
+        
+        E+@ -> E+@/Y -> E/Y+@ (motion in entrance, door, camera in frontyard)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Motion in entrance
+        # E+@ - motion in entrance
         helper.trigger_motion("binary_sensor.motion_entrance")
 
-        # Magnetic door
+        # E+@/Y - door opens
         helper.trigger_sensor("binary_sensor.magnetic_entry", True, delay=2.0)
 
-        # Camera person detection
+        # E/Y+@ - camera sensors detect person
         helper.trigger_sensor("binary_sensor.person_front_left_camera", True, delay=1.0)
-
-        # Camera motion detection
         helper.trigger_sensor("binary_sensor.motion_front_left_camera", True, delay=0.5)
-
         assert coordinator.get_occupancy("frontyard") >= 1
 
     async def test_all_sensor_types_in_one_area(
         self, hass_with_realistic_config: HomeAssistant
     ):
-        """Test area with multiple sensor types all triggering."""
+        """
+        Area with multiple sensor types all triggering.
+        
+        B+@ (motion camera + person camera + magnetic all triggered)
+        """
         coordinator = hass_with_realistic_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Backyard has motion and person camera sensors
+        # B+@ - all sensors for backyard triggered
         timestamp = helper.current_time
-
-        # Trigger all sensors for backyard
         coordinator.process_sensor_event(
             "binary_sensor.motion_back_left_camera", True, timestamp
         )
         coordinator.process_sensor_event(
             "binary_sensor.person_back_left_camera", True, timestamp + 0.5
         )
-
-        # Magnetic sensors that bridge to backyard
         coordinator.process_sensor_event(
             "binary_sensor.magnetic_terrace", True, timestamp + 1.0
         )
-
-        # Should have occupancy
         assert coordinator.get_occupancy("backyard") >= 1
