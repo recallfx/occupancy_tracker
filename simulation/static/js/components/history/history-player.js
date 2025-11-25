@@ -2,73 +2,18 @@
  * History playback module for occupancy tracker simulation
  */
 
+import { showToast } from '../../utils.js';
+
 export class HistoryPlayer {
-    constructor(ws, onStateChange) {
+    constructor(ws, onStateChange, historyControlsElement) {
         this.ws = ws;
         this.onStateChange = onStateChange;
+        this.historyControlsElement = historyControlsElement;
         this.history = [];
         this.currentIndex = 0;
         this.isPlaying = false;
         this.playInterval = null;
         this.isHistoryMode = false;
-        
-        this.setupControls();
-    }
-    
-    setupControls() {
-        this.controls = document.getElementById('historyControls');
-        this.slider = document.getElementById('historySlider');
-        this.playPauseBtn = document.getElementById('historyPlayPause');
-        this.stepBackBtn = document.getElementById('historyStepBack');
-        this.stepForwardBtn = document.getElementById('historyStepForward');
-        this.exitBtn = document.getElementById('exitHistoryButton');
-        this.infoSpan = document.getElementById('historyInfo');
-        this.timestampSpan = document.getElementById('historyTimestamp');
-        
-        this.slider.addEventListener('input', (e) => {
-            this.currentIndex = parseInt(e.target.value);
-            this.showSnapshot(this.currentIndex);
-        });
-        
-        this.playPauseBtn.addEventListener('click', () => {
-            this.togglePlayback();
-        });
-        
-        this.stepBackBtn.addEventListener('click', () => {
-            this.stepBackward();
-        });
-        
-        this.stepForwardBtn.addEventListener('click', () => {
-            this.stepForward();
-        });
-        
-        this.exitBtn.addEventListener('click', () => {
-            this.exitHistoryMode();
-        });
-        
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (!this.isHistoryMode) return;
-            
-            switch(e.key) {
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    this.stepBackward();
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    this.stepForward();
-                    break;
-                case ' ':
-                    e.preventDefault();
-                    this.togglePlayback();
-                    break;
-                case 'Escape':
-                    e.preventDefault();
-                    this.exitHistoryMode();
-                    break;
-            }
-        });
     }
     
     async loadHistory() {
@@ -82,11 +27,7 @@ export class HistoryPlayer {
                 return false;
             }
             
-            this.slider.max = this.history.length - 1;
-            this.slider.value = this.history.length - 1;
             this.currentIndex = this.history.length - 1;
-            
-            this.updateInfo();
             return true;
         } catch (err) {
             console.error('Failed to load history:', err);
@@ -97,23 +38,48 @@ export class HistoryPlayer {
     async enterHistoryMode() {
         const loaded = await this.loadHistory();
         if (!loaded) {
-            alert('No history available to replay');
-            return;
+            showToast('No history available to replay', 'warning');
+            return false;
         }
         
         this.isHistoryMode = true;
-        this.controls.style.display = 'block';
         this.showSnapshot(this.currentIndex);
+        this.updateControls();
+        
+        if (this.historyControlsElement) {
+            this.historyControlsElement.visible = true;
+        }
+        
+        return true;
     }
     
     exitHistoryMode() {
         this.isHistoryMode = false;
         this.stopPlayback();
-        this.controls.style.display = 'none';
+        
+        if (this.historyControlsElement) {
+            this.historyControlsElement.visible = false;
+        }
         
         // Request current live state
         if (this.onStateChange) {
             this.onStateChange(null); // Signal to return to live mode
+        }
+    }
+    
+    updateControls() {
+        if (!this.historyControlsElement) return;
+        
+        this.historyControlsElement.currentIndex = this.currentIndex;
+        this.historyControlsElement.totalCount = this.history.length;
+        this.historyControlsElement.isPlaying = this.isPlaying;
+        
+        const snapshot = this.history[this.currentIndex];
+        if (snapshot) {
+            const date = new Date(snapshot.timestamp * 1000);
+            const timeStr = date.toLocaleTimeString();
+            const desc = snapshot.description || 'System tick';
+            this.historyControlsElement.timestamp = `${timeStr} - ${desc}`;
         }
     }
     
@@ -122,7 +88,6 @@ export class HistoryPlayer {
         
         const snapshot = this.history[index];
         this.currentIndex = index;
-        this.slider.value = index;
         
         // Convert snapshot to simulation state format
         const state = {
@@ -158,35 +123,23 @@ export class HistoryPlayer {
             };
         }
         
-        this.updateInfo();
-        this.updateTimestamp(snapshot);
-        
         if (this.onStateChange) {
             this.onStateChange(state);
         }
-    }
-    
-    updateInfo() {
-        this.infoSpan.textContent = `${this.currentIndex + 1} / ${this.history.length}`;
-    }
-    
-    updateTimestamp(snapshot) {
-        const date = new Date(snapshot.timestamp * 1000);
-        const timeStr = date.toLocaleTimeString();
-        const desc = snapshot.description || 'System tick';
-        this.timestampSpan.textContent = `${timeStr} - ${desc}`;
     }
     
     stepForward() {
         if (this.currentIndex < this.history.length - 1) {
             this.showSnapshot(this.currentIndex + 1);
         }
+        this.updateControls();
     }
     
     stepBackward() {
         if (this.currentIndex > 0) {
             this.showSnapshot(this.currentIndex - 1);
         }
+        this.updateControls();
     }
     
     togglePlayback() {
@@ -195,11 +148,12 @@ export class HistoryPlayer {
         } else {
             this.startPlayback();
         }
+        this.updateControls();
     }
     
     startPlayback() {
         this.isPlaying = true;
-        this.playPauseBtn.textContent = '⏸️';
+        this.updateControls();
         
         this.playInterval = setInterval(() => {
             if (this.currentIndex < this.history.length - 1) {
@@ -212,11 +166,18 @@ export class HistoryPlayer {
     
     stopPlayback() {
         this.isPlaying = false;
-        this.playPauseBtn.textContent = '▶️';
+        this.updateControls();
         
         if (this.playInterval) {
             clearInterval(this.playInterval);
             this.playInterval = null;
+        }
+    }
+    
+    seekTo(index) {
+        if (index >= 0 && index < this.history.length) {
+            this.showSnapshot(index);
+            this.updateControls();
         }
     }
     

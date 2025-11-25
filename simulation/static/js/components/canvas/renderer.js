@@ -1,9 +1,12 @@
-import { formatTime } from './utils.js';
+import { formatTime } from '../../utils.js';
 
 const d3 = window.d3;
 
-export function render(containerId, layout, state, persons, activeSensors, elements, dragBehavior) {
-    const container = d3.select(containerId);
+export function render(containerElement, layout, state, persons, activeSensors, elements, dragBehavior) {
+    // Handle both selector strings and DOM elements
+    const container = typeof containerElement === 'string' 
+        ? d3.select(containerElement) 
+        : d3.select(containerElement);
     const width = layout.dimensions?.width || 800;
     const height = layout.dimensions?.height || 600;
 

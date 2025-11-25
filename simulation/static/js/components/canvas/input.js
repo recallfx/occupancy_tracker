@@ -82,7 +82,16 @@ export function createInputSystem(persons, layout, activeSensors, sendEventCallb
 
     // Click-to-move: Set up click handler on SVG background
     function setupClickToMove() {
-        svg = d3.select('#sim-container svg');
+        // Try to find SVG in both regular DOM and shadow DOM
+        const canvasElement = document.querySelector('sim-canvas');
+        const container = canvasElement?.shadowRoot?.querySelector('#sim-container');
+        
+        if (container) {
+            svg = d3.select(container).select('svg');
+        } else {
+            svg = d3.select('#sim-container svg');
+        }
+        
         if (svg.empty()) {
             setTimeout(setupClickToMove, 100);
             return;
