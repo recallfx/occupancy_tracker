@@ -116,8 +116,8 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         if isinstance(area_ids, str):
             area_ids = [area_ids]
         
-        # Capture state before processing
-        old_occupancy = {aid: self.areas[aid].occupancy for aid in area_ids if aid in self.areas}
+        # Capture state before processing (all areas, not just linked ones)
+        old_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
         
         # Update sensor state
         state_changed = sensor.update_state(state, timestamp)
@@ -180,7 +180,6 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         
     def async_set_updated_data(self, data):
         self.data = data
-        _LOGGER.debug(f"async_set_updated_data called with history_count={data.get('history_count', 'missing')}")
         for callback in self._listeners:
             if asyncio.iscoroutinefunction(callback):
                 asyncio.create_task(callback())

@@ -179,8 +179,11 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         
         # Then check ALL other areas for occupancy changes (e.g., exits during moves)
         for area_id, area in self.areas.items():
-            if area_id not in area_ids:
-                old_occ = old_occupancy.get(area_id, 0)
+            if area_id in area_ids:
+                continue
+            # Only log if we captured the old value and it changed
+            if area_id in old_occupancy:
+                old_occ = old_occupancy[area_id]
                 if old_occ != area.occupancy:
                     prob = self.get_occupancy_probability(area_id, timestamp)
                     changes.append(f"{area_id}[{old_occ}→{area.occupancy}, p={prob:.2f}]")
