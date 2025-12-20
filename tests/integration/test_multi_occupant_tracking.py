@@ -445,7 +445,10 @@ class TestSensorTimingVariations:
         # Person moves to B while A still active
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=3)
         
-        # Movement should be recognized immediately
+        # A turns off (person has moved away)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
+        
+        # Movement should be recognized
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
 
@@ -509,6 +512,9 @@ class TestSensorTimingVariations:
 
         # Person walks toward B - B sees them while A still sees them
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        
+        # A turns off (person has moved away)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
         
         # Movement recognized
         assert coordinator.get_occupancy("area_a") == 0
@@ -594,11 +600,19 @@ class TestSensorTimingVariations:
 
         # Quick walk: B activates while A still on
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=1)
+        
+        # A turns off (person has moved away)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
+        
         assert coordinator.get_occupancy("area_b") == 1
         assert coordinator.get_occupancy("area_a") == 0
 
         # Even quicker: C activates while A and B still on
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=1)
+        
+        # B turns off (person has moved away)
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=0.1)
+        
         assert coordinator.get_occupancy("area_c") == 1
         assert coordinator.get_occupancy("area_b") == 0
 
@@ -663,7 +677,10 @@ class TestSensorTimingVariations:
         # A turns off
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
 
-        # Person 2 enters at A while person 1 still in B
+        # B turns off (person 1 settled in B)
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=1)
+        
+        # Person 2 enters at A while person 1 is settled in B (no active motion)
         helper.trigger_sensor("binary_sensor.motion_a", True, delay=2)
         
         # Both should be tracked
@@ -679,7 +696,9 @@ class TestSensorTimingVariations:
 
         # Person 2 also moves to B (A->B)
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
-        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
+        
+        # A turns off (person 2 has left)
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
         
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1, "Person 2 should be in B"
