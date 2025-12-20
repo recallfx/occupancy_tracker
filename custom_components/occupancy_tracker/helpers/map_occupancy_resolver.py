@@ -463,7 +463,7 @@ class MapOccupancyResolver:
                 _LOGGER.debug(
                     f"Motion-OFF in exit-capable {area_id}: clearing (person left system)"
                 )
-                area.clear_occupancy(timestamp)
+                area.clear_occupancy(timestamp, target_id="outside")
                 return area_id
 
             # No evidence of movement - person stayed
@@ -530,10 +530,12 @@ class MapOccupancyResolver:
             _LOGGER.debug(
                 f"Motion-OFF in {area_id}: clearing (person moved to neighbor)"
             )
+            # Record all targets in last_exit_to to ensure activity is consumed for all of them
+            targets = list(to_mark)
             if area.is_exit_capable:
-                area.clear_occupancy(timestamp, target_id=primary_target)
+                area.clear_occupancy(timestamp, target_id=targets)
             else:
-                area.record_exit(timestamp, target_id=primary_target)
+                area.record_exit(timestamp, target_id=targets)
 
         # Return the first target for logging
         return primary_target

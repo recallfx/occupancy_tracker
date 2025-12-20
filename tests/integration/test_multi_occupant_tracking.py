@@ -88,8 +88,8 @@ class TestSingleOccupantScenarios:
         # A deactivates
         helper.trigger_sensor("binary_sensor.motion_a", False)
 
-        # A@ - A is inactive but still occupied
-        assert coordinator.get_occupancy("area_a") == 1
+        # A is exit-capable, so it clears immediately when motion stops
+        assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 0
         assert coordinator.get_occupancy("area_c") == 0
 
@@ -209,9 +209,9 @@ class TestMultiOccupantScenarios:
         assert coordinator.get_occupancy("area_b") == 0
         assert coordinator.get_occupancy("area_c") == 1, "Person 1 should still be in C"
 
-        # A deactivates - both still in their places
+        # A deactivates - person 2 leaves (A is exit-capable)
         helper.trigger_sensor("binary_sensor.motion_a", False)
-        assert coordinator.get_occupancy("area_a") == 1
+        assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_c") == 1
 
     async def test_scenario_5_two_movements_to_same_destination(
@@ -485,6 +485,9 @@ class TestSensorTimingVariations:
         keeps the person in A; later B ON cannot steal them.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        # Make area_a NOT exit_capable for this test so they stay
+        coordinator.areas["area_a"].is_exit_capable = False
+        
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A
@@ -641,6 +644,9 @@ class TestSensorTimingVariations:
         This should not cause any occupancy changes.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        # Make area_a NOT exit_capable for this test so it doesn't clear on flicker
+        coordinator.areas["area_a"].is_exit_capable = False
+        
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A
@@ -721,6 +727,9 @@ class TestSensorTimingVariations:
         keeps A occupied.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
+        # Make area_a NOT exit_capable for this test
+        coordinator.areas["area_a"].is_exit_capable = False
+        
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A

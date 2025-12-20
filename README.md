@@ -75,7 +75,7 @@ areas:
     exit_capable: false  # Optional: set true for entry/exit points
 ```
 
-**Exit-capable areas** (front door, backyard, etc.) automatically clear after 5 minutes of inactivity.
+**Exit-capable areas** (front door, backyard, etc.) clear occupancy immediately when motion stops, unless movement to a neighbor is detected. They also have a 5-minute auto-clear fallback.
 
 ### Adjacency Map
 
@@ -131,7 +131,7 @@ The system uses an event-driven probabilistic state machine:
 1. **Motion detected (ON)** → Marks area occupied immediately. Checks adjacent rooms for a "plausible source" (occupancy or active motion) and flags anomalies if none found.
 2. **Motion cleared (OFF)** → Checks if an adjacent room activated *after* this room turned ON. If so, moves the occupant to the neighbor. If not, the person is assumed to have stayed.
 3. **Confidence decay** → Probability drops over time without motion (100% → 10% over 1 hour), but occupancy remains until movement is detected.
-4. **Exit detection** → Auto-clears exit-capable areas (front door, backyard) after 5 minutes of inactivity.
+4. **Exit detection** → Clears exit-capable areas (front door, backyard) immediately when motion stops (with a 5-minute auto-clear fallback).
 5. **Anomaly alerts** → Flags impossible movements, stuck sensors, or extended occupancy (12h+).
 
 For technical details, see [ARCHITECTURE.md](ARCHITECTURE.md).

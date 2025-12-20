@@ -116,6 +116,9 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if snapshot:
             # Consistency checks removed in lean architecture
             # Logic is now event-driven only (Motion On/Off)
+            self.occupancy_resolver.process_snapshot(
+                snapshot, self.areas, self.sensors, self.anomaly_detector
+            )
 
             self._refresh_latest_snapshot_state()  # Log detailed state changes
             self._log_state_change(

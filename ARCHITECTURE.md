@@ -109,11 +109,11 @@ The `get_occupancy_probability` method implements:
 
 ### 2.3 Timeouts & Cleanup
 
-#### Exit-Capable Auto-Clear
+#### Exit-Capable Behavior
 If an area is marked `exit_capable` (e.g., Garage, Front Door, Backyard):
-- **5 minutes** of no motion triggers auto-clear
-- Assumes the person left the house/system
-- Creates a warning for tracking purposes
+- **Immediate Clear**: Occupancy resets to 0 as soon as motion stops (Motion-OFF), provided no movement to an adjacent area was detected during the activation window.
+- **5-Minute Fallback**: If a Motion-OFF event is missed, the area auto-clears after 5 minutes of inactivity.
+- Creates a warning for tracking purposes if auto-cleared via timeout.
 
 #### Stale State Reset
 For all areas:
@@ -124,8 +124,10 @@ For all areas:
 
 #### Motion Sensors
 - **Types**: `motion`, `camera_motion`, `camera_person`
-- **Activation**: Triggers occupancy evaluation (entry logic)
-- **Deactivation**: Records in history, doesn't clear occupancy
+- **Activation**: Triggers occupancy evaluation (leading activation).
+- **Deactivation**: 
+  - For **regular areas**: Person stays (occupancy remains).
+  - For **exit_capable areas**: Occupancy clears immediately to 0 (unless movement to a neighbor was detected).
 
 #### Magnetic Sensors
 - **Type**: `magnetic`

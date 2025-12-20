@@ -30,7 +30,9 @@ class AreaState:
         if len(self.activity_history) > MAX_HISTORY_LENGTH:
             self.activity_history.pop(0)
 
-    def record_exit(self, timestamp: float, target_id: str = None) -> bool:
+    def record_exit(
+        self, timestamp: float, target_id: str | list[str] | None = None
+    ) -> bool:
         """Record exit from this area. Returns False if no occupancy to decrement."""
         if self.occupancy <= 0:
             return False
@@ -40,7 +42,11 @@ class AreaState:
             self.activity_history.pop(0)
 
         if target_id:
-            self.last_exit_to[target_id] = timestamp
+            if isinstance(target_id, list):
+                for tid in target_id:
+                    self.last_exit_to[tid] = timestamp
+            else:
+                self.last_exit_to[target_id] = timestamp
 
         # Clean up old exit records (older than 5 minutes)
         OLD_EXIT_THRESHOLD = 300  # 5 minutes
@@ -54,7 +60,9 @@ class AreaState:
 
         return True
 
-    def clear_occupancy(self, timestamp: float, target_id: str = None) -> None:
+    def clear_occupancy(
+        self, timestamp: float, target_id: str | list[str] | None = None
+    ) -> None:
         """Clear all occupancy from this area."""
         if self.occupancy > 0:
             self.occupancy = 0
@@ -63,7 +71,11 @@ class AreaState:
                 self.activity_history.pop(0)
 
             if target_id:
-                self.last_exit_to[target_id] = timestamp
+                if isinstance(target_id, list):
+                    for tid in target_id:
+                        self.last_exit_to[tid] = timestamp
+                else:
+                    self.last_exit_to[target_id] = timestamp
 
     def get_inactivity_duration(self, timestamp: float) -> float:
         """Returns time in seconds since last motion."""
