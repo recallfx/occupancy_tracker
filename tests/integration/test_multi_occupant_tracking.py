@@ -487,7 +487,7 @@ class TestSensorTimingVariations:
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
         # Make area_a NOT exit_capable for this test so they stay
         coordinator.areas["area_a"].is_exit_capable = False
-        
+
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A
@@ -646,7 +646,7 @@ class TestSensorTimingVariations:
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
         # Make area_a NOT exit_capable for this test so it doesn't clear on flicker
         coordinator.areas["area_a"].is_exit_capable = False
-        
+
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A
@@ -729,7 +729,7 @@ class TestSensorTimingVariations:
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
         # Make area_a NOT exit_capable for this test
         coordinator.areas["area_a"].is_exit_capable = False
-        
+
         helper = SensorEventHelper(coordinator)
 
         # Person enters at A
