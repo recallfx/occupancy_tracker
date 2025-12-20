@@ -163,6 +163,25 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         )
         self.async_set_updated_data(self.get_simulation_state())
 
+    def reset(self) -> None:
+        """Reset simulation state and broadcast the fresh snapshot."""
+        now = time.time()
+
+        for area in self.areas.values():
+            area.reset()
+
+        for sensor in self.sensors.values():
+            sensor.reset()
+            sensor.last_changed = now
+            sensor.last_update_time = now
+
+        self.occupancy_resolver.reset()
+        self.anomaly_detector = AnomalyDetector(self.config)
+        self.state_recorder.reset()
+        self.last_event_time = now
+
+        self.async_set_updated_data(self.get_simulation_state(now))
+
     def reset_warnings(self) -> None:
         """Clear warnings and refresh the simulation payload."""
         if self.anomaly_detector.clear_warnings():

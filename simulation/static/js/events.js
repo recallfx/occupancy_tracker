@@ -30,6 +30,17 @@ export class EventCoordinator {
             this.wsManager.sendResetWarnings();
         });
 
+        // Full state reset
+        document.addEventListener('reset-state', () => {
+            this.appState.historyPlayer?.exitHistoryMode();
+            if (this.appState.inputSystem?.cleanup) {
+                this.appState.inputSystem.cleanup();
+            }
+            this.appState.resetSimulationState();
+            this.wsManager.sendResetState();
+            this.update();
+        });
+
         // History controls
         document.addEventListener('history-open', () => {
             this.handleHistoryOpen();

@@ -105,6 +105,16 @@ async def websocket_handler(request):
                 elif data["type"] == "reset_warnings":
                     _LOGGER.info("Received request to clear warnings")
                     coordinator.reset_warnings()
+                elif data["type"] == "reset_state":
+                    _LOGGER.info("Received request to reset simulation state")
+                    coordinator.reset()
+                    # Send a fresh init payload so the client fully re-syncs layout/state
+                    if not ws.closed:
+                        await ws.send_json({
+                            "type": "init",
+                            "layout": app["layout"],
+                            "state": coordinator.data
+                        })
                 elif data["type"] == "resolve_warning":
                     warning_id = data.get("warning_id")
                     if warning_id:

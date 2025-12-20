@@ -120,5 +120,12 @@ export function createInputSystem(persons, layout, activeSensors, sendEventCallb
     
     setupClickToMove();
 
-    return { drag, checkSensors };
+    function cleanup() {
+        for (const timeoutId of sensorTimeouts.values()) {
+            clearTimeout(timeoutId);
+        }
+        sensorTimeouts.clear();
+    }
+
+    return { drag, checkSensors, cleanup };
 }

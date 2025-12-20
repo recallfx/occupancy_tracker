@@ -3,6 +3,11 @@
  */
 
 const DEFAULT_DIMENSIONS = { width: 600, height: 500 };
+const DEFAULT_PERSONS = [
+    { id: 1, x: 50, y: 50, dragging: false, radius: 15 },
+    { id: 2, x: 100, y: 50, dragging: false, radius: 15 },
+    { id: 3, x: 150, y: 50, dragging: false, radius: 15 }
+];
 
 export class AppState {
     constructor() {
@@ -23,12 +28,7 @@ export class AppState {
         };
         
         // Simulation-specific state
-        this.persons = [
-            { id: 1, x: 50, y: 50, dragging: false, radius: 15 },
-            { id: 2, x: 100, y: 50, dragging: false, radius: 15 },
-            { id: 3, x: 150, y: 50, dragging: false, radius: 15 }
-        ];
-        
+        this.persons = this._createDefaultPersons();
         this.activeSensors = new Set();
         
         // References (set externally)
@@ -58,6 +58,15 @@ export class AppState {
         }
     }
 
+    resetSimulationState() {
+        if (this.inputSystem?.cleanup) {
+            this.inputSystem.cleanup();
+        }
+        this.persons = this._createDefaultPersons();
+        this.activeSensors = new Set();
+        this.inputSystem = null;
+    }
+
     updateUI() {
         if (this.appElement) {
             this.appElement.connectionStatus = this.ws?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected';
@@ -65,5 +74,9 @@ export class AppState {
             this.appElement.hasWarnings = Array.isArray(this.state.warnings) && this.state.warnings.length > 0;
             this.appElement.canSend = this.ws?.readyState === WebSocket.OPEN;
         }
+    }
+
+    _createDefaultPersons() {
+        return DEFAULT_PERSONS.map(person => ({ ...person }));
     }
 }

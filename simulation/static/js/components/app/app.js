@@ -153,6 +153,11 @@ export class OccupancySimApp extends LitElement {
                         ✓ Verify History
                     </button>
                     <button class="ghost-button"
+                            ?disabled=${!this.canSend}
+                            @click=${this._handleResetState}>
+                        ⟳ Reset State
+                    </button>
+                    <button class="ghost-button"
                             ?disabled=${!this.hasWarnings || !this.canSend}
                             @click=${this._handleResetWarnings}>
                         Reset Warnings
@@ -191,6 +196,10 @@ export class OccupancySimApp extends LitElement {
 
     _handleVerifyClick() {
         this.dispatchEvent(new CustomEvent('verify-history', { bubbles: true, composed: true }));
+    }
+
+    _handleResetState() {
+        this.dispatchEvent(new CustomEvent('reset-state', { bubbles: true, composed: true }));
     }
 
     _handleResetWarnings() {

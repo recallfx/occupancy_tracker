@@ -425,16 +425,18 @@ function drawMap(svg, layout, state, persons, activeSensors, dragBehavior) {
     const personNode = personLayer.selectAll('.person')
         .data(persons, d => d.id);
 
-    personNode.enter().append('circle')
+    const personsMerged = personNode.enter().append('circle')
         .attr('class', 'person')
         .attr('r', d => d.radius)
         .attr('fill', 'rgba(255, 0, 0, 0.7)')
         .attr('stroke', 'black')
         .attr('cursor', 'grab')
-        .call(dragBehavior)
         .merge(personNode)
         .attr('cx', d => d.x)
         .attr('cy', d => d.y);
+
+    // Rebind drag behavior after resets so drag handlers point to the current input system
+    personsMerged.call(dragBehavior);
         
     personNode.exit().remove();
 }

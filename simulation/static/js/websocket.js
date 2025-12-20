@@ -94,4 +94,13 @@ export class WebSocketManager {
         this.ws.send(JSON.stringify({ type: 'reset_warnings' }));
         showToast('Warnings reset', 'success');
     }
+
+    sendResetState() {
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+            showToast('Cannot reset state - not connected', 'error');
+            return;
+        }
+        this.ws.send(JSON.stringify({ type: 'reset_state' }));
+        showToast('Simulation state reset', 'success');
+    }
 }

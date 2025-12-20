@@ -89,6 +89,11 @@ Write like a human. Avoid flowery language, summary phrases, vague statements, a
 
 Document significant decisions, findings, and context that future sessions need to know. Most recent entries first.
 
+### 2025-12-20: Simulation reset control
+- Added simulation reset command via WebSocket and UI button in the simulator header
+- Reset flow clears backend areas/sensors/history and resets local draggable people/input system (exits history mode first)
+- Use the "Reset State" button (requires active WS connection)
+
 ### 2024-11-26: Instructions file created
 - Established architecture documentation with core flow, components, and patterns
 - Key insight: `MapOccupancyResolver` is stateless and mutates `AreaState` in-place
