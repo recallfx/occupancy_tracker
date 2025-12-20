@@ -48,6 +48,7 @@ class MapOccupancyResolver:
     RECENT_ACTIVATION_WINDOW = 5.0  # seconds - for explicit movement detection
     ANTI_BOUNCE_WINDOW = 10.0  # seconds - prevent ping-pong between areas
     MASKED_MOVEMENT_WINDOW = 30.0  # seconds - for masked movement detection
+    OUTDOOR_INTRUSION_WINDOW = 20 * 60  # seconds - outdoor-to-indoor allowance window
     
     # Source detection thresholds
     # "Stationary" here means: sensor has been continuously ON for a short while.
@@ -136,7 +137,7 @@ class MapOccupancyResolver:
             else:
                 move_target = self._handle_motion_off(sensor, timestamp, areas, sensors)
         
-        elif sensor_type in ("door", "garage_door", "window"):
+        elif sensor_type in ("door", "garage_door", "window", "magnetic"):
             move_target = self._handle_magnetic_event(sensor, new_state, timestamp, areas)
         
         # Run consistency resolution after the primary event
@@ -236,6 +237,85 @@ class MapOccupancyResolver:
             _LOGGER.debug(f"Motion-ON in occupied {area_id}: already occupied, no change")
             return None
 
+        # Detect unexpected motion when no adjacent source exists
+        plausible_source = False
+        indoor_source = False
+        recent_outdoor_activity = False
+        has_outdoor_neighbor = False
+        for neighbor_id in self.adjacency_map.get(area_id, []):
+            neighbor = areas.get(neighbor_id)
+            if not neighbor:
+                continue
+
+            neighbor_active = self._is_area_active(neighbor_id, sensors)
+            neighbor_activation = self._get_area_activated_at(neighbor_id, sensors) if neighbor_active else None
+
+            # Indoors neighbors with occupancy or active motion are plausible sources
+            if neighbor.is_indoors:
+                if neighbor.occupancy > 0 or neighbor_active:
+                    plausible_source = True
+                    indoor_source = True
+                    break
+
+            # Outdoor neighbors are only plausible if already occupied (someone known outside)
+            if not neighbor.is_indoors:
+                has_outdoor_neighbor = True
+                if neighbor.occupancy > 0:
+                    plausible_source = True
+                    # keep searching to see if an indoor source exists too
+
+            # Track recent outdoor activation to flag potential intrusion
+            if not neighbor.is_indoors and neighbor_activation:
+                if neighbor_activation >= (timestamp - self.OUTDOOR_INTRUSION_WINDOW):
+                    recent_outdoor_activity = True
+
+        # Door/garage/window activity can legitimize outside → inside entry
+        recent_magnetic = False
+        for sensor_state in sensors.values():
+            sensor_type = sensor_state.config.get("type", "")
+            if sensor_type not in ("door", "garage_door", "window", "magnetic"):
+                continue
+            sensor_areas = self._normalize_area_ids(sensor_state.config.get("area"))
+            if area_id not in sensor_areas:
+                continue
+            if sensor_state.last_changed and sensor_state.last_changed >= (timestamp - self.OUTDOOR_INTRUSION_WINDOW):
+                recent_magnetic = True
+                break
+
+        # If indoor area has no plausible source and no recent outside/magnetic evidence, treat as anomaly and ignore entry
+        if (
+            area.is_indoors
+            and area.occupancy == 0
+            and not indoor_source
+            and not recent_outdoor_activity
+            and not recent_magnetic
+            and has_outdoor_neighbor
+        ):
+            if anomaly_detector:
+                anomaly_detector.record_unexpected_activation(
+                    area_id,
+                    sensor.id,
+                    timestamp,
+                    context="indoor_activation_unlinked",
+                )
+            _LOGGER.debug(f"Motion-ON in {area_id}: ignored unlinked indoor activation")
+            return None
+
+        if anomaly_detector and not area.is_exit_capable and not recent_magnetic:
+            context = None
+            if area.is_indoors and recent_outdoor_activity and not indoor_source:
+                context = "intrusion_outside_adjacent"
+            elif not plausible_source:
+                context = "no_adjacent_source"
+
+            if context:
+                anomaly_detector.record_unexpected_activation(
+                    area_id,
+                    sensor.id,
+                    timestamp,
+                    context=context,
+                )
+
         # Area is empty - mark it occupied (leading activation detected)
         _LOGGER.debug(f"Motion-ON in {area_id}: marking occupied (leading activation)")
         area.record_entry(timestamp)
@@ -294,6 +374,16 @@ class MapOccupancyResolver:
             _LOGGER.debug(f"Motion-OFF in {area_id}: no activation time, person stays")
             return None
 
+        # Helper: decide if a neighbor activation is fresh enough to count as movement evidence
+        # We accept either: (a) activation very close to the OFF timestamp, or
+        # (b) activation that happened shortly after the source turned ON (common with long sensor timeouts).
+        def _activation_matches_window(neighbor_activated: float) -> bool:
+            if neighbor_activated >= (timestamp - self.RECENT_ACTIVATION_WINDOW):
+                return True
+            if (neighbor_activated - source_on_time) <= self.MASKED_MOVEMENT_WINDOW:
+                return True
+            return False
+
         # Scan adjacent areas for valid activations in (source_on_time, timestamp]
         valid_neighbors = []
         for neighbor_id in self.adjacency_map.get(area_id, []):
@@ -307,7 +397,10 @@ class MapOccupancyResolver:
                 continue
             
             # Check if neighbor activated in the window: source_on < neighbor <= off
-            if source_on_time < neighbor_activated <= timestamp:
+            if (
+                source_on_time < neighbor_activated <= timestamp
+                and _activation_matches_window(neighbor_activated)
+            ):
                 valid_neighbors.append((neighbor_id, neighbor_activated))
 
         # Fallback: if no activation-window evidence, check for currently-active neighbors
@@ -318,10 +411,10 @@ class MapOccupancyResolver:
                 if not neighbor:
                     continue
                 
-                # If neighbor is currently ON, person likely moved there or is transitioning
-                if self._is_area_active(neighbor_id, sensors):
+                # If neighbor is currently ON and occupied, person likely moved or is transitioning
+                if neighbor.occupancy > 0 and self._is_area_active(neighbor_id, sensors):
                     neighbor_activated = self._get_area_activated_at(neighbor_id, sensors)
-                    if neighbor_activated is not None:
+                    if neighbor_activated is not None and _activation_matches_window(neighbor_activated):
                         valid_neighbors.append((neighbor_id, neighbor_activated))
                         _LOGGER.debug(f"Motion-OFF {area_id}: found active neighbor {neighbor_id} (slow movement)")
 
@@ -374,10 +467,9 @@ class MapOccupancyResolver:
                 _LOGGER.debug(f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)")
                 target.record_entry(timestamp)
 
-        # Clear source area (person moved to valid neighbor)
-        # This applies to both transition AND stay areas when movement evidence exists
-        _LOGGER.debug(f"Motion-OFF in {area_id}: clearing (person moved to neighbor)")
-        area.occupancy = 0
+        if to_mark:
+            _LOGGER.debug(f"Motion-OFF in {area_id}: clearing (person moved to neighbor)")
+            area.occupancy = 0
 
         # Return the first target for logging
         return list(to_mark)[0] if to_mark else None

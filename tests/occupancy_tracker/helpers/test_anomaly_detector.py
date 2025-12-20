@@ -6,6 +6,10 @@ from custom_components.occupancy_tracker.helpers.anomaly_detector import (
     AnomalyDetector,
 )
 from custom_components.occupancy_tracker.helpers.area_state import AreaState
+from custom_components.occupancy_tracker.helpers.map_occupancy_resolver import (
+    MapOccupancyResolver,
+)
+from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
 from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
 
 
@@ -219,6 +223,44 @@ class TestAnomalyDetector:
         # Should only have one warning
         warnings = detector.get_warnings()
         assert len(warnings) == 1
+
+    def test_unexpected_activation_warns_when_no_adjacent_source(self):
+        """Unexpected motion in an empty non-exit area creates a warning."""
+        timestamp = time.time()
+        config = {
+            "areas": {"back_hall": {"name": "Back Hall"}},
+            "adjacency": {},
+            "sensors": {},
+        }
+
+        resolver = MapOccupancyResolver(config)
+        detector = AnomalyDetector(config)
+
+        areas = {
+            "back_hall": AreaState("back_hall", config["areas"]["back_hall"]),
+        }
+        sensors = {
+            "binary_sensor.back": SensorState(
+                "binary_sensor.back",
+                {"area": "back_hall", "type": "motion"},
+                timestamp,
+            )
+        }
+
+        snapshot = MapSnapshot(
+            timestamp=timestamp,
+            event_type="sensor",
+            description="sensor:binary_sensor.back:on",
+            areas={},
+            sensors={},
+        )
+
+        resolver.process_snapshot(snapshot, areas, sensors, detector)
+
+        warnings = detector.get_warnings()
+        assert len(warnings) == 1
+        assert warnings[0].type == "unexpected_motion"
+        assert warnings[0].area == "back_hall"
 
     def test_check_timeouts_recent_activity_no_warning(self):
         """Test that recent activity doesn't trigger warnings."""
