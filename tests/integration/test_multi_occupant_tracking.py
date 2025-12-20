@@ -17,7 +17,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.occupancy_tracker import async_setup, DOMAIN
-from tests.integration.test_fixtures import SensorEventHelper
+from tests.integration.conftest import SensorEventHelper
 
 
 @pytest.fixture
@@ -104,50 +104,53 @@ class TestSingleOccupantScenarios:
 
         # Initial: person in A (simulate entry)
         helper.trigger_sensor("binary_sensor.motion_a", True)
-        helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
-        
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_b") == 0
 
-        # B activates - person moves from A to B
-        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        # A stays ON, B activates (t=0.5), then A turns OFF (t=1)
+        # Window: (0, 1], B at 0.5 is in window -> movement evidence found
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=0.5)
+        assert coordinator.get_occupancy("area_b") == 1  # B marked occupied
         
-        # AB+@ - B is active and occupied, A becomes empty
+        # A motion OFF - since B already activated in window, A clears
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.5)
+        
+        # A clears, B remains occupied
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
         assert coordinator.get_occupancy("area_c") == 0
 
     async def test_scenario_3_movement_through_chain(self, hass_with_linear_config: HomeAssistant):
         """
-        Scenario 3: ABC -> A+@BC -> AB+@C -> ABC+@ -> ABC@
+        Scenario 3: A+@ -> AB+@ -> BC+@ -> C+@ -> C@
         
         A person moves from A through B to C.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
         helper = SensorEventHelper(coordinator)
 
-        # Initial: person enters at A
+        # Initial: person enters at A (t=0)
         helper.trigger_sensor("binary_sensor.motion_a", True)
         assert coordinator.get_occupancy("area_a") == 1
 
-        # Move to B
-        helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
+        # B activates (t=0.5), A OFF at t=1
+        # Window: (0, 1], B at 0.5 is in window -> movement evidence
+        helper.trigger_sensor("binary_sensor.motion_b", True, delay=0.5)
+        assert coordinator.get_occupancy("area_b") == 1
+        helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.5)
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
         assert coordinator.get_occupancy("area_c") == 0
 
-        # A deactivates (person left)
-        helper.trigger_sensor("binary_sensor.motion_a", False)
-
-        # Move to C
-        helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
+        # C activates (t=1.5), B OFF at t=2
+        # Window: (1, 2], C at 1.5 is in window -> movement evidence
+        helper.trigger_sensor("binary_sensor.motion_c", True, delay=0.5)
+        assert coordinator.get_occupancy("area_c") == 1
+        helper.trigger_sensor("binary_sensor.motion_b", False, delay=0.5)
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 0
         assert coordinator.get_occupancy("area_c") == 1
 
-        # B deactivates
-        helper.trigger_sensor("binary_sensor.motion_b", False)
-        
         # C deactivates - person still in C
         helper.trigger_sensor("binary_sensor.motion_c", False)
         assert coordinator.get_occupancy("area_a") == 0

@@ -11,6 +11,7 @@ class SensorState:
         self.config = sensor_config
         self.current_state = False
         self.last_changed = timestamp
+        self.activated_at = None  # Timestamp when sensor last transitioned OFF→ON (None if never activated)
         self.last_update_time = timestamp
         self.history = []  # List of (timestamp, state) tuples
         self.is_reliable = True
@@ -31,6 +32,9 @@ class SensorState:
         if new_state != self.current_state:
             self.current_state = new_state
             self.last_changed = timestamp
+            # Track activation time when transitioning OFF→ON
+            if new_state:
+                self.activated_at = timestamp
             return True
         return False
 
@@ -54,6 +58,7 @@ class SensorState:
     def reset(self) -> None:
         """Reset sensor state to initial values."""
         self.current_state = False
+        self.activated_at = None
         self.history = []
         self.is_reliable = True
         self.is_stuck = False

@@ -13,6 +13,7 @@ class AreaState:
         self.activity_history = []  # List of (timestamp, activity_type) tuples
         self.is_indoors = area_config.get("indoors", True)
         self.is_exit_capable = area_config.get("exit_capable", False)
+        self.is_transition = area_config.get("transition", False)
         self.last_exit_to: dict[str, float] = {}  # Map of target_area_id -> timestamp
 
     def record_motion(self, timestamp: float) -> None:

@@ -5,6 +5,7 @@ class AreaConfig(TypedDict, total=False):
     name: str
     indoors: bool
     exit_capable: bool
+    transition: bool
 
 
 class MotionSensorConfig(TypedDict):

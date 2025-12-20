@@ -120,17 +120,8 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 self.anomaly_detector,
             )
             
-            # Check for consistency (Refill active empty areas)
-            # Loop up to 3 times to propagate changes (e.g. Outside -> Entrance -> Living)
-            for _ in range(3):
-                if not self.occupancy_resolver.resolve_consistency(
-                    self.areas,
-                    self.sensors,
-                    timestamp,
-                    self.anomaly_detector,
-                    recent_move_target_id=recent_move_target_id
-                ):
-                    break
+            # Consistency checks removed in lean architecture
+            # Logic is now event-driven only (Motion On/Off)
 
             self._refresh_latest_snapshot_state()            # Log detailed state changes
             self._log_state_change(sensor_id, sensor_type, state, area_ids, old_occupancy, timestamp)
@@ -433,9 +424,4 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         
         Returns True if any changes were made.
         """
-        return self.occupancy_resolver.resolve_consistency_periodic(
-            self.areas,
-            self.sensors,
-            timestamp,
-            self.anomaly_detector,
-        )
+        return False  # Periodic consistency disabled in lean architecture
