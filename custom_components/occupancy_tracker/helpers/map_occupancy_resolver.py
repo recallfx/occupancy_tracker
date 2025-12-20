@@ -40,7 +40,7 @@ class MapOccupancyResolver:
     """
 
     MOTION_SENSOR_TYPES = {"motion", "camera_motion", "camera_person"}
-    ADJACENT_ACTIVITY_WINDOW = 120  # seconds
+    ADJACENT_ACTIVITY_WINDOW = 60  # seconds
     PASS_THROUGH_WINDOW = 1.5  # seconds - quick pass-through detection
     DEACTIVATION_LOOKBACK = 3
     
@@ -48,7 +48,7 @@ class MapOccupancyResolver:
     RECENT_ACTIVATION_WINDOW = 5.0  # seconds - for explicit movement detection
     ANTI_BOUNCE_WINDOW = 10.0  # seconds - prevent ping-pong between areas
     MASKED_MOVEMENT_WINDOW = 30.0  # seconds - for masked movement detection
-    OUTDOOR_INTRUSION_WINDOW = 20 * 60  # seconds - outdoor-to-indoor allowance window
+    OUTDOOR_INTRUSION_WINDOW = 300.0  # seconds - outdoor-to-indoor allowance window
     
     # Source detection thresholds
     # "Stationary" here means: sensor has been continuously ON for a short while.
@@ -249,10 +249,27 @@ class MapOccupancyResolver:
 
             neighbor_active = self._is_area_active(neighbor_id, sensors)
             neighbor_activation = self._get_area_activated_at(neighbor_id, sensors) if neighbor_active else None
+            
+            # Check if neighbor was recently active (even if now OFF)
+            neighbor_recently_active = (timestamp - neighbor.last_motion) <= self.ADJACENT_ACTIVITY_WINDOW
+            
+            # If neighbor was recently active but moved to a DIFFERENT area, 
+            # then its activity is "consumed" and shouldn't justify this area.
+            if neighbor_recently_active and neighbor.occupancy == 0 and not neighbor_active:
+                # If it moved to THIS area, it's definitely plausible
+                if area_id in neighbor.last_exit_to:
+                    pass 
+                elif neighbor.last_exit_to:
+                    # It moved elsewhere - check if that move is still "fresh"
+                    # If the move happened recently, this neighbor's activity is accounted for.
+                    for target_id, exit_ts in neighbor.last_exit_to.items():
+                        if (timestamp - exit_ts) <= self.ADJACENT_ACTIVITY_WINDOW:
+                            neighbor_recently_active = False
+                            break
 
             # Indoors neighbors with occupancy or active motion are plausible sources
             if neighbor.is_indoors:
-                if neighbor.occupancy > 0 or neighbor_active:
+                if neighbor.occupancy > 0 or neighbor_active or neighbor_recently_active:
                     plausible_source = True
                     indoor_source = True
                     break
@@ -265,8 +282,8 @@ class MapOccupancyResolver:
                     # keep searching to see if an indoor source exists too
 
             # Track recent outdoor activation to flag potential intrusion
-            if not neighbor.is_indoors and neighbor_activation:
-                if neighbor_activation >= (timestamp - self.OUTDOOR_INTRUSION_WINDOW):
+            if not neighbor.is_indoors:
+                if (timestamp - neighbor.last_motion) <= self.OUTDOOR_INTRUSION_WINDOW:
                     recent_outdoor_activity = True
 
         # Door/garage/window activity can legitimize outside → inside entry
@@ -367,6 +384,9 @@ class MapOccupancyResolver:
         if not area or area.occupancy <= 0:
             return None
 
+        # Update last_motion on deactivation too
+        area.last_motion = timestamp
+
         # Get the source area's activation time (when its sensor turned ON)
         source_on_time = sensor.activated_at
         if source_on_time is None:
@@ -419,6 +439,13 @@ class MapOccupancyResolver:
                         _LOGGER.debug(f"Motion-OFF {area_id}: found active neighbor {neighbor_id} (slow movement)")
 
         if not valid_neighbors:
+            # If area is exit-capable and motion stops without a neighbor activation,
+            # assume the person left the system entirely.
+            if area.is_exit_capable:
+                _LOGGER.debug(f"Motion-OFF in exit-capable {area_id}: clearing (person left system)")
+                area.clear_occupancy(timestamp)
+                return area_id
+
             # No evidence of movement - person stayed
             _LOGGER.debug(f"Motion-OFF in {area_id}: no adjacent activation in window, person stays")
             return None
@@ -461,18 +488,25 @@ class MapOccupancyResolver:
                 _LOGGER.debug(f"Motion-OFF {area_id}: multi-hop to {next_id} via {current_id}")
         
         # Mark all found targets as occupied
+        primary_target = None
         for target_id in to_mark:
             target = areas.get(target_id)
-            if target and target.occupancy == 0:
-                _LOGGER.debug(f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)")
-                target.record_entry(timestamp)
+            if target:
+                if target.occupancy == 0:
+                    _LOGGER.debug(f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)")
+                    target.record_entry(timestamp)
+                if primary_target is None:
+                    primary_target = target_id
 
         if to_mark:
             _LOGGER.debug(f"Motion-OFF in {area_id}: clearing (person moved to neighbor)")
-            area.occupancy = 0
+            if area.is_exit_capable:
+                area.clear_occupancy(timestamp, target_id=primary_target)
+            else:
+                area.record_exit(timestamp, target_id=primary_target)
 
         # Return the first target for logging
-        return list(to_mark)[0] if to_mark else None
+        return primary_target
 
 
 

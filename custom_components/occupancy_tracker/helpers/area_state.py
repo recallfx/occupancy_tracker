@@ -53,6 +53,17 @@ class AreaState:
             
         return True
 
+    def clear_occupancy(self, timestamp: float, target_id: str = None) -> None:
+        """Clear all occupancy from this area."""
+        if self.occupancy > 0:
+            self.occupancy = 0
+            self.activity_history.append((timestamp, "clear"))
+            if len(self.activity_history) > MAX_HISTORY_LENGTH:
+                self.activity_history.pop(0)
+            
+            if target_id:
+                self.last_exit_to[target_id] = timestamp
+
     def get_inactivity_duration(self, timestamp: float) -> float:
         """Returns time in seconds since last motion."""
         return timestamp - self.last_motion
