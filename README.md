@@ -126,13 +126,13 @@ System-wide entities:
 
 ## How It Works
 
-The system uses a probabilistic state machine:
+The system uses an event-driven probabilistic state machine:
 
-1. **Motion detected** → Checks adjacent rooms for recent activity
-2. **Valid transition** → Moves occupant count between rooms
-3. **Confidence decay** → Probability drops over time without motion
-4. **Exit detection** → Auto-clears exit-capable areas after 5 min
-5. **Anomaly alerts** → Flags impossible movements or stuck sensors
+1. **Motion detected (ON)** → Marks area occupied immediately. Checks adjacent rooms for a "plausible source" (occupancy or active motion) and flags anomalies if none found.
+2. **Motion cleared (OFF)** → Checks if an adjacent room activated *after* this room turned ON. If so, moves the occupant to the neighbor. If not, the person is assumed to have stayed.
+3. **Confidence decay** → Probability drops over time without motion (100% → 10% over 1 hour), but occupancy remains until movement is detected.
+4. **Exit detection** → Auto-clears exit-capable areas (front door, backyard) after 5 minutes of inactivity.
+5. **Anomaly alerts** → Flags impossible movements, stuck sensors, or extended occupancy (12h+).
 
 For technical details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

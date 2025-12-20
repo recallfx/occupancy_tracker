@@ -17,5 +17,5 @@ uv run pytest tests/occupancy_tracker/test_sensor.py
 
 3. Run a specific test function:
 ```bash
-uv run pytest tests/occupancy_tracker/test_sensor.py::test_context_clobbering_race_condition
+uv run pytest tests/occupancy_tracker/test_init.py::TestAsyncSetup::test_setup_success
 ```

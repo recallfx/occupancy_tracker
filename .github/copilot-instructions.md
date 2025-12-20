@@ -9,17 +9,17 @@ Home Assistant integration for room presence detection using probabilistic state
 **Core flow**: HA sensor events → `__init__.py:state_change_listener` → `coordinator.process_sensor_event()` → `MapOccupancyResolver.process_snapshot()` → state mutations → `async_set_updated_data()`
 
 **Key components**:
-- `OccupancyCoordinator` (`coordinator.py`): Owns all state (`self.areas`, `self.sensors`), orchestrates helpers
-- `MapOccupancyResolver` (`helpers/map_occupancy_resolver.py`): Stateless logic engine - processes snapshots, mutates AreaState in-place
-- `AreaState` / `SensorState` (`helpers/`): Data models with occupancy counts, timestamps, activity history
-- `AnomalyDetector` (`helpers/anomaly_detector.py`): Generates warnings for stuck sensors, impossible movements
-- `MapStateRecorder`: Captures immutable snapshots for history replay and crash recovery
+- `OccupancyCoordinator` (`coordinator.py`): Owns all state (`self.areas`, `self.sensors`), orchestrates helpers.
+- `MapOccupancyResolver` (`helpers/map_occupancy_resolver.py`): Stateless logic engine - processes snapshots, mutates AreaState in-place. Uses an **activation-window model** for movement.
+- `AreaState` / `SensorState` (`helpers/`): Data models with occupancy counts, timestamps, activity history.
+- `AnomalyDetector` (`helpers/anomaly_detector.py`): Generates warnings for stuck sensors, impossible movements, and timeouts.
+- `MapStateRecorder`: Captures immutable snapshots for history replay and crash recovery.
 
-**Key principle**: Occupancy is an integer counter (supports multiple people), not boolean. People can only move via adjacency map - no teleportation.
+**Key principle**: Occupancy is an integer counter. People move via adjacency map. Movement is only confirmed when a sensor turns OFF and a neighbor has a matching activation window.
 
 ## Configuration
 
-YAML-only via `async_setup` in `__init__.py`. **No Config Flow** - don't reference `config_flow.py` or `async_step_user`.
+YAML-only via `async_setup` in `__init__.py`. **No Config Flow**.
 
 ```yaml
 occupancy_tracker:
@@ -27,6 +27,7 @@ occupancy_tracker:
     living_room:
       name: "Living Room"
       exit_capable: false  # true for front doors, backyards
+      indoors: true        # false for yards, porches
   adjacency:
     living_room: [kitchen, hallway]  # auto-bidirectional
   sensors:
@@ -57,11 +58,11 @@ uv run pytest -v -m end_to_end          # by marker
 
 ## Critical patterns
 
-**Motion-ON**: Find occupied adjacent area → move occupant. If none found and `exit_capable`, add new person. Otherwise flag anomaly but still add (lights must work).
+**Motion-ON**: Mark area occupied immediately (leading activation). Check adjacent areas for "plausible source" (occupied or active). If none found, flag anomaly (e.g., `no_adjacent_source`) but still add occupancy.
 
-**Motion-OFF**: Person STAYS unless adjacent sensor activated within 5s (explicit move) or is active AND occupied (masked movement). Don't move based on stale activations.
+**Motion-OFF**: Person STAYS unless an adjacent sensor activated *after* this area turned ON and *before/at* this area turned OFF. If valid neighbor(s) found, move occupancy (clear source, mark targets). Supports multi-hop through active paths.
 
-**Consistency resolution**: `resolve_consistency()` runs after events; `resolve_consistency_periodic()` runs every 5s to handle edge cases where areas are active but empty.
+**Consistency resolution**: Periodic consistency checks are **disabled** in the lean architecture. Logic is purely event-driven.
 
 **Probability decay**: 100% → 90% → exponential decay to 10% over ~1 hour. Formula in `get_occupancy_probability()`.
 
@@ -73,11 +74,12 @@ Uses `SimOccupancyCoordinator` wrapping the real coordinator, loads from `config
 
 ## Common pitfalls
 
-- Don't poll - system is event-driven. Use `async_set_updated_data()` after state changes
-- Adjacency is auto-bidirectional; defining `A → B` implies `B → A`
-- `exit_capable` areas (doors, yards) auto-clear after 5min and allow "entry from outside"
-- Sensor entity IDs must match HA format (`binary_sensor.xyz`)
-- State is mutable - `MapOccupancyResolver` modifies `AreaState` objects directly
+- Don't poll - system is event-driven. Use `async_set_updated_data()` after state changes.
+- Adjacency is auto-bidirectional.
+- `exit_capable` areas auto-clear after 5min.
+- `indoors` defaults to true; set false for outdoor areas to improve anomaly detection.
+- Sensor entity IDs must match HA format (`binary_sensor.xyz`).
+- State is mutable - `MapOccupancyResolver` modifies `AreaState` objects directly.
 
 ## Writing style
 
@@ -88,6 +90,13 @@ Write like a human. Avoid flowery language, summary phrases, vague statements, a
 ## Session Log
 
 Document significant decisions, findings, and context that future sessions need to know. Most recent entries first.
+
+### 2025-12-20: Activation-Window Refactor
+- Refactored `MapOccupancyResolver` to use an activation-window model.
+- Movement now happens on **Motion-OFF** if a neighbor activated after the source turned ON.
+- **Motion-ON** now only records entry and checks for plausible sources (anomalies).
+- Periodic consistency checks disabled to simplify logic and improve predictability.
+- Added `indoors` config for areas to better detect outdoor-to-indoor intrusions.
 
 ### 2025-12-20: Simulation reset control
 - Added simulation reset command via WebSocket and UI button in the simulator header

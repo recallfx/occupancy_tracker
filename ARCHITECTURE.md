@@ -72,26 +72,25 @@ When motion is detected in an area, the resolver evaluates the situation:
 
 1. **Already Occupied**: No change to count. Update `last_motion` timestamp.
 
-2. **Empty Area**: The resolver checks neighbors defined in `adjacency`:
-   - **Valid Move**: If a neighbor is occupied and had recent activity (within 120s) or recent deactivation, occupancy moves:
-     - Neighbor area: -1 occupant
-     - Target area: +1 occupant
-   
-   - **Entry from Outside**: If the area is `exit_capable` (e.g., Front Hall, Backyard):
-     - Target area: +1 occupant (new person entering the system)
-   
-   - **Anomaly**: If neither above is true:
-     - System forces occupancy (Target +1) to ensure lights turn on
-     - Flags a warning for "Unexpected Motion"
+2. **Empty Area**: The resolver marks the area as occupied (leading activation).
+   - **Anomaly Check**: It checks neighbors defined in `adjacency` for a "plausible source":
+     - **Plausible Source**: A neighbor is occupied, or has active motion, or had recent magnetic sensor activity (door/window).
+     - **Unexpected Motion**: If no plausible source is found (and the area is not `exit_capable`), it flags a warning but still adds occupancy to ensure lights turn on.
+     - **Outdoor Intrusion**: Special checks for indoor areas with only outdoor neighbors to detect potential intrusions.
 
 #### Exit (Motion OFF)
 
-Motion clearing does **not** immediately clear occupancy:
-- Updates the "last active" timestamp
-- Stores deactivation in recent history (last 3 deactivations per area)
-- Occupancy is only cleared by:
-  - Moving to another room (validated transition)
-  - Timeout conditions (see section 2.3)
+Motion clearing is the primary trigger for **movement** between areas:
+
+1. **Activation Window**: The resolver checks adjacent areas for activations that happened *after* the source area turned ON but *before* or at the same time as it turned OFF.
+   - **Valid Move**: If a neighbor activated in this window, the person is assumed to have moved.
+     - Source area: Occupancy cleared (set to 0).
+     - Target area: Occupancy recorded (if not already occupied).
+   - **Multi-Hop**: If the person moved through multiple active areas, the system traverses the "active path" to find all reachable targets.
+   
+2. **Stay Logic**: If no adjacent activation is found within the window:
+   - **Person STAYS**: The source area remains occupied.
+   - This prevents "teleportation" and ensures occupancy is only cleared when there is explicit evidence of movement.
 
 ### 2.2 Probabilistic Decay
 
@@ -195,18 +194,17 @@ The `HistoryVerifier` ensures the system is deterministic by comparing recorded 
 5. **Record**: `Coordinator` creates `MapSnapshot` via `MapStateRecorder`
    - Captures: Timestamp + Sensor State + Current Area Occupancy
 6. **Resolve**: `MapOccupancyResolver.process_snapshot` analyzes:
-   - *Is Kitchen adjacent to Living Room?* → Check adjacency map
-   - *Is Living Room occupied?* → Check AreaState
-   - *Was there recent activity in Living Room?* → Check motion history
-   - *Decision*: Move occupant Living Room → Kitchen
-   - *Update*: Directly mutates `AreaState` objects (occupancy counts, timestamps)
+   - **Motion ON**: Marks area occupied. Checks for plausible sources in adjacent areas. Flags anomalies if unlinked.
+   - **Motion OFF**: Checks "Activation Window" for adjacent areas. If a neighbor activated after this area turned ON, move occupancy to the neighbor(s).
+   - **Magnetic**: Updates `last_motion` to keep paths "active" for multi-hop traversal.
+   - **Decision**: Update `AreaState` objects (occupancy counts, timestamps).
 7. **Log**: `Coordinator._log_state_change` outputs detailed event log with emoji indicators and probability scores
 8. **Post-Process**: `Coordinator` refreshes snapshot state and checks for stuck sensors via `AnomalyDetector`
 9. **Notify**: `Coordinator` calls `async_set_updated_data`, triggering HA entity updates
 
-**Logging Format**: `📍 binary_sensor.kitchen_motion → ON | living_room[1→0, p=0.90] | kitchen[0→1, p=1.00]`
+**Logging Format**: `📍 binary_sensor.kitchen_motion → ON | kitchen[0→1, p=1.00]` or `📍 binary_sensor.kitchen_motion → OFF | kitchen[1→0, p=0.90] | hallway[0→1, p=1.00]`
 
-**Key Simplification**: Direct state management by Coordinator eliminates intermediate manager layers.
+**Key Simplification**: Direct state management by Coordinator eliminates intermediate manager layers. Periodic consistency checks are disabled in favor of a pure event-driven activation-window model.
 
 ### 3.2 Timeout Processing Flow
 
@@ -318,8 +316,11 @@ sensors:
 - Motion in non-adjacent area without prior presence
 - System allows occupancy (lights turn on) but flags warning
 - Exit-capable areas exempt from this check
-- Warnings include context about adjacent area activity for easier diagnosis
-- Example: `"Unexpected motion in bedroom (no adjacent activity)"` or `"Unexpected motion in kitchen (recently active: living_room)"`
+- Warnings include context for easier diagnosis:
+  - `indoor_activation_unlinked`: Indoor area activated with no plausible source and only outdoor neighbors.
+  - `intrusion_outside_adjacent`: Indoor area activated with recent outdoor activity but no indoor source.
+  - `no_adjacent_source`: No adjacent area was occupied or active.
+- Example: `"Unexpected motion in bedroom (no adjacent source)"`
 
 ## 8. Testing Strategy
 
