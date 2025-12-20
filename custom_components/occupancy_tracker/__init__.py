@@ -8,7 +8,10 @@ import voluptuous as vol
 from homeassistant.core import Event, HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from datetime import timedelta
 
 from .const import DOMAIN
@@ -72,7 +75,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     # Create the coordinator instance.
     coordinator = OccupancyCoordinator(hass, occupancy_config)
-    
+
     # Store the coordinator
     hass.data[DOMAIN] = {"coordinator": coordinator}
 
@@ -95,7 +98,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             # Interpret HA state: 'on' becomes True; any other value is False
             sensor_state = new_state.state.lower() == "on"
             timestamp = time.time()
-            
+
             # Process event through coordinator
             coordinator.process_sensor_event(
                 entity_id, sensor_state, timestamp=timestamp
@@ -113,17 +116,19 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         """Handle periodic checks."""
         coordinator.check_timeouts(timestamp=now.timestamp())
 
-    remove_interval = async_track_time_interval(hass, interval_listener, timedelta(seconds=60))
+    remove_interval = async_track_time_interval(
+        hass, interval_listener, timedelta(seconds=60)
+    )
     hass.data[DOMAIN]["remove_update_listener"] = remove_interval
 
     # Ensure timer is cleaned up when HA stops
     from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-    
+
     async def _cleanup_timer(event):
         remove_interval()
         # Also stop the coordinator's periodic updates
         await coordinator.async_shutdown()
-        
+
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _cleanup_timer)
 
     # Set up the sensor platform
@@ -141,7 +146,7 @@ def _validate_config(config: OccupancyTrackerConfig) -> bool:
     areas = config.get("areas", {})
     adjacency = config.get("adjacency", {})
     sensors = config.get("sensors", {})
-    
+
     # Validate adjacency
     for area_id, adjacent_areas in adjacency.items():
         if area_id not in areas:
@@ -149,9 +154,11 @@ def _validate_config(config: OccupancyTrackerConfig) -> bool:
             return False
         for adj_id in adjacent_areas:
             if adj_id not in areas:
-                _LOGGER.error(f"Adjacency config for {area_id} references unknown area: {adj_id}")
+                _LOGGER.error(
+                    f"Adjacency config for {area_id} references unknown area: {adj_id}"
+                )
                 return False
-                
+
     # Validate sensors
     for sensor_id, sensor_config in sensors.items():
         area_config = sensor_config.get("area")
@@ -159,16 +166,20 @@ def _validate_config(config: OccupancyTrackerConfig) -> bool:
             area_ids = area_config if isinstance(area_config, list) else [area_config]
             for area_id in area_ids:
                 if area_id not in areas:
-                    _LOGGER.error(f"Sensor {sensor_id} references unknown area: {area_id}")
+                    _LOGGER.error(
+                        f"Sensor {sensor_id} references unknown area: {area_id}"
+                    )
                     return False
-                
+
         # Validate between_areas for magnetic sensors
         if sensor_config.get("type") == "magnetic":
             between = sensor_config.get("between_areas")
             if between:
                 for area_id in between:
                     if area_id not in areas:
-                        _LOGGER.error(f"Sensor {sensor_id} between_areas references unknown area: {area_id}")
+                        _LOGGER.error(
+                            f"Sensor {sensor_id} between_areas references unknown area: {area_id}"
+                        )
                         return False
 
     return True

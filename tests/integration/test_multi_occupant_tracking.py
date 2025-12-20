@@ -24,7 +24,7 @@ from tests.integration.conftest import SensorEventHelper
 def linear_config() -> dict:
     """
     Simple linear layout: A -- B -- C
-    
+
     This represents a hallway-like structure where you must pass through B
     to get from A to C.
     """
@@ -65,7 +65,7 @@ class TestSingleOccupantScenarios:
     async def test_scenario_1_appearance(self, hass_with_linear_config: HomeAssistant):
         """
         Scenario 1: A -> A+@ -> A@
-        
+
         A person appears in area A (entry from outside).
         After sensor deactivates, they should still be marked as present.
         """
@@ -79,7 +79,7 @@ class TestSingleOccupantScenarios:
 
         # A activates - person appears (entry from outside, exit-capable area)
         helper.trigger_sensor("binary_sensor.motion_a", True)
-        
+
         # A+@ - A is active and occupied
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_b") == 0
@@ -87,16 +87,18 @@ class TestSingleOccupantScenarios:
 
         # A deactivates
         helper.trigger_sensor("binary_sensor.motion_a", False)
-        
+
         # A@ - A is inactive but still occupied
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_b") == 0
         assert coordinator.get_occupancy("area_c") == 0
 
-    async def test_scenario_2_simple_movement(self, hass_with_linear_config: HomeAssistant):
+    async def test_scenario_2_simple_movement(
+        self, hass_with_linear_config: HomeAssistant
+    ):
         """
         Scenario 2: AB -> A+@B -> AB+@
-        
+
         A person in A moves to B.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
@@ -111,19 +113,21 @@ class TestSingleOccupantScenarios:
         # Window: (0, 1], B at 0.5 is in window -> movement evidence found
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=0.5)
         assert coordinator.get_occupancy("area_b") == 1  # B marked occupied
-        
+
         # A motion OFF - since B already activated in window, A clears
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.5)
-        
+
         # A clears, B remains occupied
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
         assert coordinator.get_occupancy("area_c") == 0
 
-    async def test_scenario_3_movement_through_chain(self, hass_with_linear_config: HomeAssistant):
+    async def test_scenario_3_movement_through_chain(
+        self, hass_with_linear_config: HomeAssistant
+    ):
         """
         Scenario 3: A+@ -> AB+@ -> BC+@ -> C+@ -> C@
-        
+
         A person moves from A through B to C.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
@@ -166,7 +170,7 @@ class TestMultiOccupantScenarios:
     ):
         """
         Scenario 4: ABC -> A+@BC -> AB+@C -> ABC+@ -> ABC@ -> A+@BC@ -> A@BC@
-        
+
         Person 1 moves from A to C.
         Then person 2 appears at A.
         Both should be tracked correctly.
@@ -199,7 +203,7 @@ class TestMultiOccupantScenarios:
         # Wait enough time so it's clearly a new entry
         helper.advance_time(5)
         helper.trigger_sensor("binary_sensor.motion_a", True)
-        
+
         # A+@BC@ - A occupied (person 2), C still occupied (person 1)
         assert coordinator.get_occupancy("area_a") == 1, "Person 2 should be in A"
         assert coordinator.get_occupancy("area_b") == 0
@@ -231,7 +235,7 @@ class TestMultiOccupantScenarios:
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
         helper.trigger_sensor("binary_sensor.motion_c", False)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
 
         # Person 2 enters at A
@@ -243,7 +247,7 @@ class TestMultiOccupantScenarios:
         # Person 2 moves to B
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_a", False)
-        
+
         # AB+@C@ - B has person 2, C has person 1
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1, "Person 2 should be in B"
@@ -252,11 +256,13 @@ class TestMultiOccupantScenarios:
         # Person 2 moves to C (joins person 1)
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
-        
+
         # ABC+@ - C has both persons
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 0
-        assert coordinator.get_occupancy("area_c") == 1, "Current resolver does not increment when destination already occupied"
+        assert coordinator.get_occupancy("area_c") == 1, (
+            "Current resolver does not increment when destination already occupied"
+        )
 
     async def test_scenario_6_simultaneous_activation_same_destination(
         self, hass_with_linear_config: HomeAssistant
@@ -281,12 +287,12 @@ class TestMultiOccupantScenarios:
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
         # Note: C stays active (person 1 is still triggering it)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
 
         # Person 2 enters at A while person 1 keeps C active
         helper.trigger_sensor("binary_sensor.motion_a", True, delay=1)
-        
+
         # A+@BC+@ - A has person 2, C has person 1 (with active sensor)
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_c") == 1
@@ -294,7 +300,7 @@ class TestMultiOccupantScenarios:
         # Person 2 moves to B (C still active from person 1)
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_a", False)
-        
+
         # AB+@C+@ - B has person 2, C has person 1
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
@@ -304,20 +310,22 @@ class TestMultiOccupantScenarios:
         # (in real world, the sensor gets a keep-alive or re-trigger)
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
-        
+
         # The key assertion: C should have 2 occupants
-        assert coordinator.get_occupancy("area_c") == 1, "Current resolver does not increment when destination already occupied"
+        assert coordinator.get_occupancy("area_c") == 1, (
+            "Current resolver does not increment when destination already occupied"
+        )
 
     async def test_scenario_7_split_destinations(
         self, hass_with_linear_config: HomeAssistant
     ):
         """
         Scenario 7: ABC -> A+@BC -> AB+@C -> ABC+@ -> A+@BC@ -> AB+@C@ -> AB@C@
-        
+
         Person 1 moves from A to C.
         Person 2 enters at A, moves to B (not all the way to C).
         Final state: person 1 in C, person 2 in B.
-        
+
         Note: In linear A-B-C layout, person 2 cannot reach C without
         going through B, so this tests stopping at B.
         """
@@ -331,7 +339,7 @@ class TestMultiOccupantScenarios:
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
         helper.trigger_sensor("binary_sensor.motion_c", False)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
 
         # Person 2 enters at A
@@ -343,14 +351,14 @@ class TestMultiOccupantScenarios:
         # Person 2 moves to B and stays there
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_a", False)
-        
+
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1, "Person 2 should be in B"
         assert coordinator.get_occupancy("area_c") == 1, "Person 1 should be in C"
 
         # B deactivates - person 2 still in B
         helper.trigger_sensor("binary_sensor.motion_b", False)
-        
+
         # AB@C@ - B has person 2, C has person 1
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
@@ -365,7 +373,7 @@ class TestEdgeCases:
     ):
         """
         Test rapid movement where sensors overlap.
-        
+
         Person moves quickly: A and B might be active simultaneously
         for a moment during the transition.
         """
@@ -378,7 +386,7 @@ class TestEdgeCases:
 
         # Person moves fast - B activates while A still active
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=0.5)
-        
+
         # Should not duplicate; resolver keeps A occupied until its OFF is handled
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_b") == 1
@@ -404,7 +412,7 @@ class TestEdgeCases:
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
         helper.trigger_sensor("binary_sensor.motion_c", False)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
 
         # Person stays in C, sensor triggers multiple times
@@ -412,7 +420,7 @@ class TestEdgeCases:
             helper.advance_time(60)  # 1 minute intervals
             helper.trigger_sensor("binary_sensor.motion_c", True)
             helper.trigger_sensor("binary_sensor.motion_c", False, delay=5)
-            
+
             # Should always be 1 in C
             assert coordinator.get_occupancy("area_c") == 1
             assert coordinator.get_occupancy("area_b") == 0
@@ -422,7 +430,7 @@ class TestEdgeCases:
 class TestSensorTimingVariations:
     """
     Test various real-world sensor timing scenarios.
-    
+
     Real PIR sensors don't turn off exactly when a person leaves.
     They have configurable timeouts, can be obscured by furniture,
     and sometimes overlap when a person is between two zones.
@@ -433,7 +441,7 @@ class TestSensorTimingVariations:
     ):
         """
         Scenario: Person moves A->B, but A's sensor stays on for 30s after.
-        
+
         Many PIR sensors have 30s-60s timeout. The person might be long gone
         from A when A's sensor finally turns off.
         """
@@ -446,23 +454,23 @@ class TestSensorTimingVariations:
 
         # Person moves to B while A still active
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=3)
-        
+
         # A turns off (person has moved away)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
-        
+
         # Movement should be recognized
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
 
         # B turns off (person stopped moving in B)
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=5)
-        
+
         # Person still in B, even though B sensor is off
         assert coordinator.get_occupancy("area_b") == 1
 
         # A finally turns off after long timeout (30s later)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=30)
-        
+
         # This should NOT move person back to A!
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
@@ -485,13 +493,13 @@ class TestSensorTimingVariations:
 
         # A turns off (person sat behind sofa, out of sensor view)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=2)
-        
+
         # Person still in A (just not visible to sensor)
         assert coordinator.get_occupancy("area_a") == 1
 
         # Much later, person finally moves to B
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=60)
-        
+
         # Should recognize this as movement from A
         assert coordinator.get_occupancy("area_a") == 1
         assert coordinator.get_occupancy("area_b") == 1
@@ -501,7 +509,7 @@ class TestSensorTimingVariations:
     ):
         """
         Scenario: Person walks from A to B, both sensors see them.
-        
+
         A activates, then B activates, then A deactivates, then B deactivates.
         This is common when walking through a doorway.
         """
@@ -514,24 +522,24 @@ class TestSensorTimingVariations:
 
         # Person walks toward B - B sees them while A still sees them
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
-        
+
         # A turns off (person has moved away)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
-        
+
         # Movement recognized
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
 
         # A finally stops seeing them
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
-        
+
         # Still in B
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1
 
         # B stops seeing them (person stopped moving)
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=3)
-        
+
         # Still in B
         assert coordinator.get_occupancy("area_b") == 1
 
@@ -554,15 +562,15 @@ class TestSensorTimingVariations:
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=2)
         helper.trigger_sensor("binary_sensor.motion_b", False)
         helper.trigger_sensor("binary_sensor.motion_c", False)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
 
         # Long pause - person is settled in C
         helper.advance_time(300)  # 5 minutes
-        
+
         # B has a false trigger (pet walked through)
         helper.trigger_sensor("binary_sensor.motion_b", True)
-        
+
         # System interprets this as movement from C to B
         # (we can't distinguish pet from human with motion sensors)
         assert coordinator.get_occupancy("area_b") == 1
@@ -570,13 +578,13 @@ class TestSensorTimingVariations:
 
         # B turns off
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=5)
-        
+
         # Person is now tracked in B (incorrectly, but will self-correct)
         assert coordinator.get_occupancy("area_b") == 1
 
         # When the actual person moves in C, state self-corrects
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=10)
-        
+
         # Person moves "back" to C (in reality they never left)
         assert coordinator.get_occupancy("area_c") == 1
         assert coordinator.get_occupancy("area_b") == 1
@@ -586,7 +594,7 @@ class TestSensorTimingVariations:
     ):
         """
         Scenario: Person walks A->B->C quickly, sensors fire in rapid succession.
-        
+
         All three might be on simultaneously at some point.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
@@ -598,19 +606,19 @@ class TestSensorTimingVariations:
 
         # Quick walk: B activates while A still on
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=1)
-        
+
         # A turns off (person has moved away)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
-        
+
         assert coordinator.get_occupancy("area_b") == 1
         assert coordinator.get_occupancy("area_a") == 0
 
         # Even quicker: C activates while A and B still on
         helper.trigger_sensor("binary_sensor.motion_c", True, delay=1)
-        
+
         # B turns off (person has moved away)
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=0.1)
-        
+
         assert coordinator.get_occupancy("area_c") == 1
         assert coordinator.get_occupancy("area_b") == 0
 
@@ -618,7 +626,7 @@ class TestSensorTimingVariations:
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=1)
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=1)
         helper.trigger_sensor("binary_sensor.motion_c", False, delay=1)
-        
+
         # Person ended up in C
         assert coordinator.get_occupancy("area_c") == 1
         assert coordinator.get_occupancy("area_b") == 0
@@ -629,7 +637,7 @@ class TestSensorTimingVariations:
     ):
         """
         Scenario: Sensor flickers off-on-off quickly (common with some PIRs).
-        
+
         This should not cause any occupancy changes.
         """
         coordinator = hass_with_linear_config.data[DOMAIN]["coordinator"]
@@ -656,7 +664,7 @@ class TestSensorTimingVariations:
     ):
         """
         Scenario: Two people, sensors overlap.
-        
+
         Person 1 goes A->B->C.
         Person 2 enters A while person 1 is in B (both B sensors might trigger).
         """
@@ -677,10 +685,10 @@ class TestSensorTimingVariations:
 
         # B turns off (person 1 settled in B)
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=1)
-        
+
         # Person 2 enters at A while person 1 is settled in B (no active motion)
         helper.trigger_sensor("binary_sensor.motion_a", True, delay=2)
-        
+
         # Both should be tracked
         assert coordinator.get_occupancy("area_a") == 1, "Person 2 should be in A"
         assert coordinator.get_occupancy("area_b") == 1, "Person 1 should still be in B"
@@ -694,10 +702,10 @@ class TestSensorTimingVariations:
 
         # Person 2 also moves to B (A->B)
         helper.trigger_sensor("binary_sensor.motion_b", True, delay=2)
-        
+
         # A turns off (person 2 has left)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=0.1)
-        
+
         assert coordinator.get_occupancy("area_a") == 0
         assert coordinator.get_occupancy("area_b") == 1, "Person 2 should be in B"
         assert coordinator.get_occupancy("area_c") == 1, "Person 1 should be in C"
@@ -734,7 +742,7 @@ class TestSensorTimingVariations:
         helper.trigger_sensor("binary_sensor.motion_b", False, delay=10)
         helper.trigger_sensor("binary_sensor.motion_a", False, delay=5)
         helper.trigger_sensor("binary_sensor.motion_c", False, delay=15)
-        
+
         # Person should still be in C
         assert coordinator.get_occupancy("area_c") == 1
         assert coordinator.get_occupancy("area_b") == 0

@@ -38,9 +38,7 @@ class SensorState:
             return True
         return False
 
-    def calculate_is_stuck(
-        self, timestamp: float
-    ) -> bool:
+    def calculate_is_stuck(self, timestamp: float) -> bool:
         """Detect if sensor appears stuck in one state."""
 
         # For ON state, check if it's been stuck for 24 hours (86400 seconds)
@@ -49,7 +47,7 @@ class SensorState:
             return True
 
         # Removed "adjacent motion implies stuck" logic as it produces false positives.
-        # A sensor being OFF while adjacent areas are active is a normal condition 
+        # A sensor being OFF while adjacent areas are active is a normal condition
         # (e.g. person is in the adjacent room but not entering this one).
 
         self.is_stuck = False
@@ -62,4 +60,3 @@ class SensorState:
         self.history = []
         self.is_reliable = True
         self.is_stuck = False
-

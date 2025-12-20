@@ -1,7 +1,7 @@
 """Tests for integration setup and initialization."""
 
 import pytest
-from unittest.mock import patch, call
+from unittest.mock import patch
 import time
 
 from homeassistant.core import HomeAssistant, Event, State
@@ -128,7 +128,9 @@ class TestStateChangeListener:
         timestamp_before = coordinator.last_event_time
 
         # Simulate processing the event
-        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event(
+            "binary_sensor.motion_living", True, time.time()
+        )
 
         # Event should have been processed
         assert coordinator.last_event_time > timestamp_before
@@ -142,10 +144,14 @@ class TestStateChangeListener:
         coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Set sensor to ON first
-        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event(
+            "binary_sensor.motion_living", True, time.time()
+        )
 
         # Then to OFF
-        coordinator.process_sensor_event("binary_sensor.motion_living", False, time.time())
+        coordinator.process_sensor_event(
+            "binary_sensor.motion_living", False, time.time()
+        )
 
         # Sensor state should be False
         assert coordinator.sensors["binary_sensor.motion_living"].current_state is False
@@ -306,7 +312,9 @@ class TestIntegrationDataFlow:
         coordinator = hass.data[DOMAIN]["coordinator"]
 
         # Simulate person entering (living room is not exit_capable, will create warning)
-        coordinator.process_sensor_event("binary_sensor.motion_living", True, time.time())
+        coordinator.process_sensor_event(
+            "binary_sensor.motion_living", True, time.time()
+        )
 
         # Should have occupancy (even if unexpected)
         assert coordinator.get_occupancy("living_room") >= 1

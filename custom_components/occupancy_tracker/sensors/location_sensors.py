@@ -20,8 +20,7 @@ class OccupiedInsideAreasSensor(CoordinatorEntity, SensorEntity):
         occupied_areas = [
             area
             for area, config in self.coordinator.config["areas"].items()
-            if config.get("indoors", True)
-            and self.coordinator.get_occupancy(area) > 0
+            if config.get("indoors", True) and self.coordinator.get_occupancy(area) > 0
         ]
         return len(occupied_areas)
 

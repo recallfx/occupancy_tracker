@@ -36,8 +36,10 @@ def test_history_verifier_identical_states(config):
     """Test that identical states produce no differences."""
     from custom_components.occupancy_tracker.helpers.area_state import AreaState
     from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
-    from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
-    
+    from custom_components.occupancy_tracker.helpers.map_state_recorder import (
+        MapSnapshot,
+    )
+
     # Create identical recorded and replayed states
     recorded_snapshot = MapSnapshot(
         timestamp=100.0,
@@ -52,25 +54,27 @@ def test_history_verifier_identical_states(config):
             "motion_b": {"state": False, "last_changed": 0.0},
         },
     )
-    
+
     replayed_areas = {
         "room_a": AreaState("room_a", {"name": "Room A"}),
         "room_b": AreaState("room_b", {"name": "Room B"}),
     }
     replayed_areas["room_a"].occupancy = 1
     replayed_areas["room_a"].last_motion = 100.0
-    
+
     replayed_sensors = {
         "motion_a": SensorState("motion_a", {"type": "motion"}, 0.0),
         "motion_b": SensorState("motion_b", {"type": "motion"}, 0.0),
     }
     replayed_sensors["motion_a"].current_state = True
     replayed_sensors["motion_a"].last_changed = 100.0
-    
+
     # Verify
     verifier = HistoryVerifier()
-    result = verifier.verify_history([recorded_snapshot], replayed_areas, replayed_sensors)
-    
+    result = verifier.verify_history(
+        [recorded_snapshot], replayed_areas, replayed_sensors
+    )
+
     assert result is True
     assert len(verifier.get_differences()) == 0
 
@@ -79,8 +83,10 @@ def test_history_verifier_detects_occupancy_mismatch(config):
     """Test that occupancy differences are detected."""
     from custom_components.occupancy_tracker.helpers.area_state import AreaState
     from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
-    from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
-    
+    from custom_components.occupancy_tracker.helpers.map_state_recorder import (
+        MapSnapshot,
+    )
+
     recorded_snapshot = MapSnapshot(
         timestamp=100.0,
         event_type="sensor",
@@ -92,22 +98,24 @@ def test_history_verifier_detects_occupancy_mismatch(config):
             "motion_a": {"state": True, "last_changed": 100.0},
         },
     )
-    
+
     replayed_areas = {
         "room_a": AreaState("room_a", {"name": "Room A"}),
     }
     replayed_areas["room_a"].occupancy = 2  # Different!
     replayed_areas["room_a"].last_motion = 100.0
-    
+
     replayed_sensors = {
         "motion_a": SensorState("motion_a", {"type": "motion"}, 0.0),
     }
     replayed_sensors["motion_a"].current_state = True
     replayed_sensors["motion_a"].last_changed = 100.0
-    
+
     verifier = HistoryVerifier()
-    result = verifier.verify_history([recorded_snapshot], replayed_areas, replayed_sensors)
-    
+    result = verifier.verify_history(
+        [recorded_snapshot], replayed_areas, replayed_sensors
+    )
+
     assert result is False
     differences = verifier.get_differences()
     assert len(differences) == 1
@@ -121,8 +129,10 @@ def test_history_verifier_detects_sensor_mismatch(config):
     """Test that sensor state differences are detected."""
     from custom_components.occupancy_tracker.helpers.area_state import AreaState
     from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
-    from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
-    
+    from custom_components.occupancy_tracker.helpers.map_state_recorder import (
+        MapSnapshot,
+    )
+
     recorded_snapshot = MapSnapshot(
         timestamp=100.0,
         event_type="sensor",
@@ -132,20 +142,22 @@ def test_history_verifier_detects_sensor_mismatch(config):
             "motion_a": {"state": True, "last_changed": 100.0},
         },
     )
-    
+
     replayed_areas = {
         "room_a": AreaState("room_a", {"name": "Room A"}),
     }
-    
+
     replayed_sensors = {
         "motion_a": SensorState("motion_a", {"type": "motion"}, 0.0),
     }
     replayed_sensors["motion_a"].current_state = False  # Different!
     replayed_sensors["motion_a"].last_changed = 100.0
-    
+
     verifier = HistoryVerifier()
-    result = verifier.verify_history([recorded_snapshot], replayed_areas, replayed_sensors)
-    
+    result = verifier.verify_history(
+        [recorded_snapshot], replayed_areas, replayed_sensors
+    )
+
     assert result is False
     differences = verifier.get_differences()
     assert len(differences) == 1
@@ -157,8 +169,10 @@ def test_history_verifier_summary(config):
     """Test that summary provides useful statistics."""
     from custom_components.occupancy_tracker.helpers.area_state import AreaState
     from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
-    from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
-    
+    from custom_components.occupancy_tracker.helpers.map_state_recorder import (
+        MapSnapshot,
+    )
+
     recorded_snapshot = MapSnapshot(
         timestamp=100.0,
         event_type="sensor",
@@ -171,23 +185,23 @@ def test_history_verifier_summary(config):
             "motion_a": {"state": True, "last_changed": 100.0},
         },
     )
-    
+
     replayed_areas = {
         "room_a": AreaState("room_a", {"name": "Room A"}),
         "room_b": AreaState("room_b", {"name": "Room B"}),
     }
     replayed_areas["room_a"].occupancy = 0  # Diff
     replayed_areas["room_b"].occupancy = 0  # Diff
-    
+
     replayed_sensors = {
         "motion_a": SensorState("motion_a", {"type": "motion"}, 0.0),
     }
     replayed_sensors["motion_a"].current_state = True
     replayed_sensors["motion_a"].last_changed = 100.0
-    
+
     verifier = HistoryVerifier()
     verifier.verify_history([recorded_snapshot], replayed_areas, replayed_sensors)
-    
+
     summary = verifier.get_summary()
     assert summary["passed"] is False
     assert summary["total_differences"] == 4  # 2 occupancy + 2 timestamp mismatches
@@ -201,13 +215,13 @@ def test_history_verifier_summary(config):
 async def test_coordinator_verify_history_deterministic(hass, config):
     """Test that coordinator history verification works on deterministic system."""
     coordinator = OccupancyCoordinator(hass, config)
-    
+
     # Generate some history
     now = time.time()
     coordinator.process_sensor_event("motion_b", True, now)
     coordinator.process_sensor_event("motion_b", False, now + 1)
     coordinator.process_sensor_event("motion_a", True, now + 2)
-    
+
     # Verify - should pass because system is deterministic
     result = coordinator.verify_history()
     assert result is True
@@ -217,18 +231,18 @@ async def test_coordinator_verify_history_deterministic(hass, config):
 async def test_coordinator_verify_history_preserves_state(hass, config):
     """Test that verification doesn't permanently change system state."""
     coordinator = OccupancyCoordinator(hass, config)
-    
+
     # Set up state
     now = time.time()
     coordinator.process_sensor_event("motion_a", True, now)
-    
+
     # Record original state
     original_occ = coordinator.areas["room_a"].occupancy
     original_motion = coordinator.areas["room_a"].last_motion
-    
+
     # Verify (internally resets and replays)
     coordinator.verify_history()
-    
+
     # Check state is restored
     assert coordinator.areas["room_a"].occupancy == original_occ
     assert coordinator.areas["room_a"].last_motion == original_motion
@@ -244,7 +258,7 @@ def test_state_difference_string_representation():
         recorded_value=1,
         replayed_value=0,
     )
-    
+
     str_repr = str(diff)
     assert "42" in str_repr
     assert "Occupancy mismatch" in str_repr

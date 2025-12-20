@@ -12,14 +12,20 @@ from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSn
 
 class SensorEventHelper:
     """Helper to trigger sensor events with precise timestamps."""
-    
+
     def __init__(self, coordinator: OccupancyCoordinator):
         self.coordinator = coordinator
         self.current_time = 0.0
-    
-    def trigger_sensor(self, sensor_id: str, state: bool = True, timestamp: float | None = None, delay: float | None = None) -> None:
+
+    def trigger_sensor(
+        self,
+        sensor_id: str,
+        state: bool = True,
+        timestamp: float | None = None,
+        delay: float | None = None,
+    ) -> None:
         """Trigger sensor state change (ON/OFF).
-        
+
         Args:
             sensor_id: The sensor entity ID
             state: True for ON, False for OFF
@@ -30,14 +36,14 @@ class SensorEventHelper:
             self.current_time += delay
         if timestamp is not None:
             self.current_time = timestamp
-        
+
         state_str = "on" if state else "off"
-        
+
         # Update the sensor state first (this sets activated_at on OFF->ON transitions)
         if sensor_id in self.coordinator.sensors:
             sensor = self.coordinator.sensors[sensor_id]
             sensor.update_state(state, self.current_time)
-        
+
         # Capture current area/sensor state for the snapshot
         areas_snapshot = {
             aid: {
@@ -53,7 +59,7 @@ class SensorEventHelper:
             }
             for sid, sensor in self.coordinator.sensors.items()
         }
-        
+
         snapshot = MapSnapshot(
             timestamp=self.current_time,
             event_type="sensor",
@@ -67,7 +73,7 @@ class SensorEventHelper:
             self.coordinator.sensors,
             self.coordinator.anomaly_detector,
         )
-    
+
     def advance_time(self, delta: float) -> None:
         """Advance the simulated time."""
         self.current_time += delta
@@ -91,9 +97,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "end_to_end: End-to-end integration test scenarios"
     )
-    config.addinivalue_line(
-        "markers", "multi_sensor: Multi-sensor coordination tests"
-    )
+    config.addinivalue_line("markers", "multi_sensor: Multi-sensor coordination tests")
     config.addinivalue_line("markers", "scenarios: Real-world scenario tests")
     config.addinivalue_line("markers", "edge_cases: Edge case and error scenario tests")
     config.addinivalue_line("markers", "anomaly: Anomaly detection integration tests")

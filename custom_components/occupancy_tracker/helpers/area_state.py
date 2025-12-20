@@ -38,19 +38,20 @@ class AreaState:
         self.activity_history.append((timestamp, "exit"))
         if len(self.activity_history) > MAX_HISTORY_LENGTH:
             self.activity_history.pop(0)
-        
+
         if target_id:
             self.last_exit_to[target_id] = timestamp
-        
+
         # Clean up old exit records (older than 5 minutes)
         OLD_EXIT_THRESHOLD = 300  # 5 minutes
         stale_keys = [
-            k for k, v in self.last_exit_to.items() 
+            k
+            for k, v in self.last_exit_to.items()
             if (timestamp - v) > OLD_EXIT_THRESHOLD
         ]
         for k in stale_keys:
             del self.last_exit_to[k]
-            
+
         return True
 
     def clear_occupancy(self, timestamp: float, target_id: str = None) -> None:
@@ -60,7 +61,7 @@ class AreaState:
             self.activity_history.append((timestamp, "clear"))
             if len(self.activity_history) > MAX_HISTORY_LENGTH:
                 self.activity_history.pop(0)
-            
+
             if target_id:
                 self.last_exit_to[target_id] = timestamp
 
@@ -80,7 +81,7 @@ class AreaState:
         self.last_motion = 0
         self.activity_history = []
         self.last_exit_to = {}
-    
+
     @property
     def is_occupied(self) -> bool:
         """Whether this area currently has one or more occupants."""

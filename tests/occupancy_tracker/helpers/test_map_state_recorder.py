@@ -127,7 +127,10 @@ def test_merge_with_config_rehydrates_static_metadata():
     merged = MapStateRecorder.merge_with_config(snapshot, config)
 
     assert merged.areas["living_room"]["exit_capable"] is True
-    assert merged.areas["living_room"]["occupancy"] == snapshot.areas["living_room"]["occupancy"]
+    assert (
+        merged.areas["living_room"]["occupancy"]
+        == snapshot.areas["living_room"]["occupancy"]
+    )
     assert merged.sensors["binary_sensor.motion_living_room"]["type"] == "motion"
     assert (
         merged.sensors["binary_sensor.motion_living_room"]["state"]

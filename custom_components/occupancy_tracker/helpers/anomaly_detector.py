@@ -22,14 +22,19 @@ class AnomalyDetector:
         self.adjacency_map = self._build_adjacency(config)
 
     def _build_adjacency(self, config: OccupancyTrackerConfig) -> Dict[str, List[str]]:
-        adjacency_config = config.get("adjacency", {}) if isinstance(config, dict) else {}
+        adjacency_config = (
+            config.get("adjacency", {}) if isinstance(config, dict) else {}
+        )
         adjacency_map: Dict[str, Set[str]] = {}
         for area_id, neighbors in adjacency_config.items():
             area_set = adjacency_map.setdefault(area_id, set())
             for neighbor_id in neighbors:
                 area_set.add(neighbor_id)
                 adjacency_map.setdefault(neighbor_id, set()).add(area_id)
-        return {area_id: sorted(list(neighbors)) for area_id, neighbors in adjacency_map.items()}
+        return {
+            area_id: sorted(list(neighbors))
+            for area_id, neighbors in adjacency_map.items()
+        }
 
     def check_for_stuck_sensors(
         self,
@@ -43,7 +48,7 @@ class AnomalyDetector:
 
         if not area_config:
             return
-            
+
         # We don't need to check if area exists here, as we just want to trigger the check
         # The actual check iterates over all sensors
 
@@ -55,15 +60,15 @@ class AnomalyDetector:
         # Check if sensors are stuck
         for sensor_id, sensor in sensors.items():
             # Calculate if stuck (only checks for long active duration now)
-            is_stuck = sensor.calculate_is_stuck(
-                triggered_sensor.last_update_time
-            )
+            is_stuck = sensor.calculate_is_stuck(triggered_sensor.last_update_time)
 
             if is_stuck and sensor.is_reliable:
                 sensor_area = sensor.config.get("area", "unknown")
                 # Handle list of areas for display
-                area_str = str(sensor_area) if isinstance(sensor_area, list) else sensor_area
-                
+                area_str = (
+                    str(sensor_area) if isinstance(sensor_area, list) else sensor_area
+                )
+
                 self._create_warning(
                     "stuck_sensor",
                     f"Sensor {sensor_id} in area {area_str} may be stuck",
@@ -83,7 +88,7 @@ class AnomalyDetector:
                 # (people can leave the system from these areas)
                 exit_timeout = 300  # 5 minutes
                 inactivity_duration = area.get_inactivity_duration(timestamp)
-                
+
                 if inactivity_duration > exit_timeout:
                     logger.info(
                         f"Auto-clearing exit-capable area {area_id} after {inactivity_duration:.0f}s of inactivity"
@@ -96,7 +101,7 @@ class AnomalyDetector:
                         timestamp=timestamp,
                     )
                     continue  # Skip regular timeout checks for this area
-            
+
             # Check for inactivity timeout if area is occupied
             if area.occupancy > 0:
                 inactivity_duration = area.get_inactivity_duration(timestamp)
@@ -168,7 +173,7 @@ class AnomalyDetector:
             message += f" via {sensor_id}"
         if context:
             message += f" ({context})"
-        
+
         self._create_warning(
             "unexpected_motion",
             message,

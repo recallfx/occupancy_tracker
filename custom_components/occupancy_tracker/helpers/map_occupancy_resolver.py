@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections import deque
 from enum import Enum, auto
-from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .anomaly_detector import AnomalyDetector
 from .area_state import AreaState
@@ -27,12 +26,12 @@ class TransitionOutcome(Enum):
 class MapOccupancyResolver:
     """
     Derives occupancy directly from recorded map snapshots.
-    
+
     CORE PRINCIPLES:
     1. Conservation of people: Users cannot appear or disappear in non-exit-capable areas
     2. Adjacency constraint: Users can only move to adjacent areas with sensor activation
     3. Last-motion priority: Area with most recent motion-off most likely has the person
-    
+
     This means:
     - Total occupancy only changes at exit_capable areas
     - Movement only happens via sensor events in connected areas
@@ -43,13 +42,13 @@ class MapOccupancyResolver:
     ADJACENT_ACTIVITY_WINDOW = 60  # seconds
     PASS_THROUGH_WINDOW = 1.5  # seconds - quick pass-through detection
     DEACTIVATION_LOOKBACK = 3
-    
+
     # Motion-off thresholds
     RECENT_ACTIVATION_WINDOW = 5.0  # seconds - for explicit movement detection
     ANTI_BOUNCE_WINDOW = 10.0  # seconds - prevent ping-pong between areas
     MASKED_MOVEMENT_WINDOW = 30.0  # seconds - for masked movement detection
     OUTDOOR_INTRUSION_WINDOW = 300.0  # seconds - outdoor-to-indoor allowance window
-    
+
     # Source detection thresholds
     # "Stationary" here means: sensor has been continuously ON for a short while.
     # This is used as a *weak* signal to avoid stealing from rooms that are clearly
@@ -61,7 +60,7 @@ class MapOccupancyResolver:
     # We avoid taking the last occupant from these areas unless there is no other plausible source.
     ANCHOR_ACTIVE_THRESHOLD = 60.0  # seconds
     MAX_SOURCE_SEARCH_HOPS = 6
-    
+
     # Consistency resolution
     MAX_CONSISTENCY_ITERATIONS = 5  # prevent infinite loops
 
@@ -136,12 +135,14 @@ class MapOccupancyResolver:
                 )
             else:
                 move_target = self._handle_motion_off(sensor, timestamp, areas, sensors)
-        
+
         elif sensor_type in ("door", "garage_door", "window", "magnetic"):
-            move_target = self._handle_magnetic_event(sensor, new_state, timestamp, areas)
-        
+            move_target = self._handle_magnetic_event(
+                sensor, new_state, timestamp, areas
+            )
+
         # Run consistency resolution after the primary event
-        # This handles "Bucket Brigade" moves where one person moving 
+        # This handles "Bucket Brigade" moves where one person moving
         # leaves a room empty that is still active.
         self.resolve_consistency(areas, sensors, timestamp)
 
@@ -157,7 +158,7 @@ class MapOccupancyResolver:
         """Rebuild occupancy entirely from history (used for resets)."""
         history = sorted(list(snapshots), key=lambda snap: snap.timestamp)
         self.reset()
-        
+
         # Reset all areas
         for area in areas.values():
             area.occupancy = 0
@@ -166,8 +167,6 @@ class MapOccupancyResolver:
 
         for snapshot in history:
             self.process_snapshot(snapshot, areas, sensors, anomaly_detector)
-
-
 
     def _handle_magnetic_event(
         self,
@@ -178,7 +177,7 @@ class MapOccupancyResolver:
     ) -> Optional[str]:
         """
         Handle magnetic sensor events (doors/windows).
-        
+
         Primary purpose: Maintaining "Active" paths for recursive search.
         Opening a door triggers `record_motion` on both sides, ensuring
         they remain "Active" (last_motion updated) so `_find_recursive_target`
@@ -186,15 +185,15 @@ class MapOccupancyResolver:
         """
         # We only care about Activity (opening/closing/state change)
         # to keep the path alive.
-        
+
         # Find areas linked to this sensor
         # Some sensors link to 2 areas (like doors between rooms)
         sensor_areas = self._normalize_area_ids(sensor.config.get("area"))
-        
+
         # Also check "between_areas" in config if present (legacy support)
         # But usually we map sensors to areas directly.
         # Let's assume the config "area" list contains the connected rooms.
-        
+
         for area_id in sensor_areas:
             area = areas.get(area_id)
             if area:
@@ -202,10 +201,8 @@ class MapOccupancyResolver:
                 # This allows _find_recursive_target to use this node
                 area.last_motion = timestamp
                 _LOGGER.debug(f"Magnetic event on {sensor.id} kept {area_id} active")
-        
+
         return None
-
-
 
     def _handle_motion_on(
         self,
@@ -216,7 +213,7 @@ class MapOccupancyResolver:
         anomaly_detector: AnomalyDetector,
     ) -> Optional[str]:
         """Handle motion sensor turning ON.
-        
+
         Layer 1 - Motion-ON Logic (Simple):
         If area sees motion, mark it occupied immediately.
         This is the leading activation - the moment we detect presence.
@@ -224,17 +221,19 @@ class MapOccupancyResolver:
         area_id = sensor.config.get("area")
         if not area_id:
             return None
-        
+
         area = areas.get(area_id)
         if not area:
             return None
-        
+
         # Update last_motion timestamp
         area.last_motion = timestamp
 
         # If area already occupied, nothing to do
         if area.occupancy > 0:
-            _LOGGER.debug(f"Motion-ON in occupied {area_id}: already occupied, no change")
+            _LOGGER.debug(
+                f"Motion-ON in occupied {area_id}: already occupied, no change"
+            )
             return None
 
         # Detect unexpected motion when no adjacent source exists
@@ -248,17 +247,22 @@ class MapOccupancyResolver:
                 continue
 
             neighbor_active = self._is_area_active(neighbor_id, sensors)
-            neighbor_activation = self._get_area_activated_at(neighbor_id, sensors) if neighbor_active else None
-            
+
             # Check if neighbor was recently active (even if now OFF)
-            neighbor_recently_active = (timestamp - neighbor.last_motion) <= self.ADJACENT_ACTIVITY_WINDOW
-            
-            # If neighbor was recently active but moved to a DIFFERENT area, 
+            neighbor_recently_active = (
+                timestamp - neighbor.last_motion
+            ) <= self.ADJACENT_ACTIVITY_WINDOW
+
+            # If neighbor was recently active but moved to a DIFFERENT area,
             # then its activity is "consumed" and shouldn't justify this area.
-            if neighbor_recently_active and neighbor.occupancy == 0 and not neighbor_active:
+            if (
+                neighbor_recently_active
+                and neighbor.occupancy == 0
+                and not neighbor_active
+            ):
                 # If it moved to THIS area, it's definitely plausible
                 if area_id in neighbor.last_exit_to:
-                    pass 
+                    pass
                 elif neighbor.last_exit_to:
                     # It moved elsewhere - check if that move is still "fresh"
                     # If the move happened recently, this neighbor's activity is accounted for.
@@ -269,7 +273,11 @@ class MapOccupancyResolver:
 
             # Indoors neighbors with occupancy or active motion are plausible sources
             if neighbor.is_indoors:
-                if neighbor.occupancy > 0 or neighbor_active or neighbor_recently_active:
+                if (
+                    neighbor.occupancy > 0
+                    or neighbor_active
+                    or neighbor_recently_active
+                ):
                     plausible_source = True
                     indoor_source = True
                     break
@@ -295,7 +303,9 @@ class MapOccupancyResolver:
             sensor_areas = self._normalize_area_ids(sensor_state.config.get("area"))
             if area_id not in sensor_areas:
                 continue
-            if sensor_state.last_changed and sensor_state.last_changed >= (timestamp - self.OUTDOOR_INTRUSION_WINDOW):
+            if sensor_state.last_changed and sensor_state.last_changed >= (
+                timestamp - self.OUTDOOR_INTRUSION_WINDOW
+            ):
                 recent_magnetic = True
                 break
 
@@ -358,18 +368,18 @@ class MapOccupancyResolver:
         sensors: Dict[str, SensorState],
     ) -> Optional[str]:
         """Handle motion sensor turning OFF.
-        
+
         Layer 2 - Motion-OFF Logic (Activation Window):
         Only mark adjacent areas occupied if they activated AFTER this area's ON.
-        
+
         Window rule: neighbor valid if source_on < neighbor_activated <= timestamp
         - Exclusive start: pre-existing neighbor activations don't count
         - Inclusive end: activations very close to OFF count as movement evidence
-        
+
         If no valid neighbor activation:
         - Person STAYED in source area
         - Source remains occupied
-        
+
         If valid neighbor(s) found:
         - Mark valid neighbors as occupied (ambiguous state)
         - Recursively expand to further areas via active paths (multi-hop)
@@ -379,7 +389,7 @@ class MapOccupancyResolver:
         area_id = sensor.config.get("area")
         if not area_id:
             return None
-        
+
         area = areas.get(area_id)
         if not area or area.occupancy <= 0:
             return None
@@ -410,12 +420,12 @@ class MapOccupancyResolver:
             neighbor = areas.get(neighbor_id)
             if not neighbor:
                 continue
-            
+
             # Get neighbor's most recent activation time
             neighbor_activated = self._get_area_activated_at(neighbor_id, sensors)
             if neighbor_activated is None:
                 continue
-            
+
             # Check if neighbor activated in the window: source_on < neighbor <= off
             if (
                 source_on_time < neighbor_activated <= timestamp
@@ -430,76 +440,96 @@ class MapOccupancyResolver:
                 neighbor = areas.get(neighbor_id)
                 if not neighbor:
                     continue
-                
+
                 # If neighbor is currently ON and occupied, person likely moved or is transitioning
-                if neighbor.occupancy > 0 and self._is_area_active(neighbor_id, sensors):
-                    neighbor_activated = self._get_area_activated_at(neighbor_id, sensors)
-                    if neighbor_activated is not None and _activation_matches_window(neighbor_activated):
+                if neighbor.occupancy > 0 and self._is_area_active(
+                    neighbor_id, sensors
+                ):
+                    neighbor_activated = self._get_area_activated_at(
+                        neighbor_id, sensors
+                    )
+                    if neighbor_activated is not None and _activation_matches_window(
+                        neighbor_activated
+                    ):
                         valid_neighbors.append((neighbor_id, neighbor_activated))
-                        _LOGGER.debug(f"Motion-OFF {area_id}: found active neighbor {neighbor_id} (slow movement)")
+                        _LOGGER.debug(
+                            f"Motion-OFF {area_id}: found active neighbor {neighbor_id} (slow movement)"
+                        )
 
         if not valid_neighbors:
             # If area is exit-capable and motion stops without a neighbor activation,
             # assume the person left the system entirely.
             if area.is_exit_capable:
-                _LOGGER.debug(f"Motion-OFF in exit-capable {area_id}: clearing (person left system)")
+                _LOGGER.debug(
+                    f"Motion-OFF in exit-capable {area_id}: clearing (person left system)"
+                )
                 area.clear_occupancy(timestamp)
                 return area_id
 
             # No evidence of movement - person stayed
-            _LOGGER.debug(f"Motion-OFF in {area_id}: no adjacent activation in window, person stays")
+            _LOGGER.debug(
+                f"Motion-OFF in {area_id}: no adjacent activation in window, person stays"
+            )
             return None
 
         # Valid neighbor(s) found - expand to all reachable areas via active paths
         # Multi-hop: traverse through currently-active areas to find all possible targets
         visited = {area_id}
         to_mark = set()
-        
+
         # BFS to find all reachable areas through active paths
         queue = [(n_id, n_time) for n_id, n_time in valid_neighbors]
         for neighbor_id, _ in valid_neighbors:
             to_mark.add(neighbor_id)
             visited.add(neighbor_id)
-        
+
         while queue:
             current_id, current_time = queue.pop(0)
             current = areas.get(current_id)
             if not current:
                 continue
-            
+
             # Look for further neighbors reachable through active paths
             for next_id in self.adjacency_map.get(current_id, []):
                 if next_id in visited:
                     continue
-                
+
                 # Only traverse through active areas (motion currently ON)
                 if not self._is_area_active(next_id, sensors):
                     continue
-                
+
                 # Check if next area activated in window
                 next_activated = self._get_area_activated_at(next_id, sensors)
-                if next_activated is None or not (source_on_time < next_activated <= timestamp):
+                if next_activated is None or not (
+                    source_on_time < next_activated <= timestamp
+                ):
                     continue
-                
+
                 # Valid multi-hop target
                 visited.add(next_id)
                 to_mark.add(next_id)
                 queue.append((next_id, next_activated))
-                _LOGGER.debug(f"Motion-OFF {area_id}: multi-hop to {next_id} via {current_id}")
-        
+                _LOGGER.debug(
+                    f"Motion-OFF {area_id}: multi-hop to {next_id} via {current_id}"
+                )
+
         # Mark all found targets as occupied
         primary_target = None
         for target_id in to_mark:
             target = areas.get(target_id)
             if target:
                 if target.occupancy == 0:
-                    _LOGGER.debug(f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)")
+                    _LOGGER.debug(
+                        f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)"
+                    )
                     target.record_entry(timestamp)
                 if primary_target is None:
                     primary_target = target_id
 
         if to_mark:
-            _LOGGER.debug(f"Motion-OFF in {area_id}: clearing (person moved to neighbor)")
+            _LOGGER.debug(
+                f"Motion-OFF in {area_id}: clearing (person moved to neighbor)"
+            )
             if area.is_exit_capable:
                 area.clear_occupancy(timestamp, target_id=primary_target)
             else:
@@ -508,15 +538,12 @@ class MapOccupancyResolver:
         # Return the first target for logging
         return primary_target
 
-
-
-
     def _is_area_active(self, area_id: str, sensors: Dict[str, SensorState]) -> bool:
         """Check if any MOTION/CAMERA sensor in the area is currently ON."""
         for sensor in sensors.values():
             if not sensor.current_state:
                 continue
-            
+
             # Only consider motion/camera sensors for activity/refill logic
             # Magnetic sensors (doors) can be left open without presence
             sensor_type = sensor.config.get("type", "")
@@ -550,7 +577,7 @@ class MapOccupancyResolver:
         self, area_id: str, sensors: Dict[str, SensorState]
     ) -> Optional[float]:
         """Return the most recent activation timestamp for currently-ON sensors in area_id.
-        
+
         Only considers sensors that are currently active (ON state).
         This ensures we only use activation evidence from live/current motion, not stale activations.
         """
@@ -559,7 +586,7 @@ class MapOccupancyResolver:
             # Only consider currently-ON sensors
             if not sensor.current_state:
                 continue
-            
+
             sensor_type = sensor.config.get("type", "")
             if sensor_type not in self.MOTION_SENSOR_TYPES:
                 continue
@@ -580,8 +607,6 @@ class MapOccupancyResolver:
         if since is None:
             return 0.0
         return max(0.0, timestamp - since)
-
-
 
     @staticmethod
     def _normalize_area_ids(raw_value: Optional[Any]) -> List[str]:

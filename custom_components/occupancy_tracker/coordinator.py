@@ -27,12 +27,13 @@ _LOGGER = logging.getLogger("coordinator")
 # Periodic update interval for consistency checks
 PERIODIC_UPDATE_INTERVAL = timedelta(seconds=5)
 
+
 class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
     """Coordinator for Occupancy Tracker."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
+        self,
+        hass: HomeAssistant,
         config: OccupancyTrackerConfig,
         enable_periodic_updates: bool = True,
     ) -> None:
@@ -56,27 +57,27 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         )
         self.config = config
         self.last_event_time = time.time()
-        
+
         # Initialize state dictionaries directly
         self.areas: Dict[str, AreaState] = {}
         self.sensors: Dict[str, SensorState] = {}
         self._initialize_areas(config)
         self._initialize_sensors(config)
-        
+
         # Initialize helpers
         self.anomaly_detector = AnomalyDetector(config)
         self.state_recorder = MapStateRecorder()
         self.occupancy_resolver = MapOccupancyResolver(config)
         self.log_formatter = LogFormatter(self.areas, self.sensors)
-        
+
         # Initialize diagnostics
         self.diagnostics = OccupancyDiagnostics(self)
-    
+
     def _initialize_areas(self, config: OccupancyTrackerConfig) -> None:
         """Initialize area tracking objects from configuration."""
         for area_id, area_config in config.get("areas", {}).items():
             self.areas[area_id] = AreaState(area_id, area_config)
-    
+
     def _initialize_sensors(self, config: OccupancyTrackerConfig) -> None:
         """Initialize sensor tracking objects from configuration."""
         for sensor_id, sensor_config in config.get("sensors", {}).items():
@@ -90,48 +91,43 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if sensor_id not in self.sensors:
             _LOGGER.warning(f"Unknown sensor ID: {sensor_id}")
             return
-        
+
         sensor = self.sensors[sensor_id]
         sensor_type = sensor.config.get("type", "")
         area_ids = sensor.config.get("area", [])
         if isinstance(area_ids, str):
             area_ids = [area_ids]
-        
+
         # Capture state before processing (all areas, not just linked ones)
         old_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
-        
+
         # Update sensor state
         state_changed = sensor.update_state(state, timestamp)
-        
+
         # Skip processing if state didn't actually change, unless it's an ON event (keep-alive)
         # We want to process repeated ON events to update last_motion and confirm presence
         if not state_changed and not state:
             return
-        
+
         # Record snapshot
         snapshot = self._record_snapshot(sensor_id, state, timestamp)
-        
-            # Process snapshot through the resolver
+
+        # Process snapshot through the resolver
         if snapshot:
-            recent_move_target_id = self.occupancy_resolver.process_snapshot(
-                snapshot,
-                self.areas,
-                self.sensors,
-                self.anomaly_detector,
-            )
-            
             # Consistency checks removed in lean architecture
             # Logic is now event-driven only (Motion On/Off)
 
-            self._refresh_latest_snapshot_state()            # Log detailed state changes
-            self._log_state_change(sensor_id, sensor_type, state, area_ids, old_occupancy, timestamp)
-            
+            self._refresh_latest_snapshot_state()  # Log detailed state changes
+            self._log_state_change(
+                sensor_id, sensor_type, state, area_ids, old_occupancy, timestamp
+            )
+
             # Check for stuck sensors after processing
             self._check_for_stuck_sensors(sensor_id, timestamp)
-            
+
             self.last_event_time = timestamp
             self.async_set_updated_data(self.diagnostics.get_system_status())
-    
+
     def _record_snapshot(
         self, sensor_id: str, state: bool, timestamp: float
     ) -> Optional[MapSnapshot]:
@@ -143,14 +139,14 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             areas=self.areas,
             sensors=self.sensors,
         )
-    
+
     def _refresh_latest_snapshot_state(self) -> None:
         """Update the latest snapshot with current state."""
         self.state_recorder.update_latest_state(
             self.areas,
             self.sensors,
         )
-    
+
     def _log_state_change(
         self,
         sensor_id: str,
@@ -163,29 +159,29 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         """Log detailed state change information using compact notation."""
         # Build new occupancy dict
         new_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
-        
+
         # Format the trigger
         trigger = self.log_formatter.format_sensor_trigger(sensor_id, state, area_ids)
-        
+
         # Format occupancy changes
-        changes = self.log_formatter.format_occupancy_changes(old_occupancy, new_occupancy)
-        
+        changes = self.log_formatter.format_occupancy_changes(
+            old_occupancy, new_occupancy
+        )
+
         # Format state view
         state_view = self.log_formatter.format_state_view(self.areas, self.sensors)
-        
+
         if changes:
             _LOGGER.info(f"📍 {trigger} | {changes} | {state_view}")
         else:
             _LOGGER.info(f"📍 {trigger} | {state_view}")
-    
+
     def _check_for_stuck_sensors(
         self, triggered_sensor_id: str, timestamp: float
     ) -> None:
         """Check for stuck sensors when a sensor is triggered."""
         self.anomaly_detector.check_for_stuck_sensors(
-            self.sensors,
-            self.areas,
-            triggered_sensor_id
+            self.sensors, self.areas, triggered_sensor_id
         )
 
     def get_occupancy(self, area_id: str) -> int:
@@ -210,21 +206,21 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             return 1.0
 
         time_since_motion = now - area.last_motion
-        
+
         # High confidence period (0-60s)
         if time_since_motion < 60:
             return 1.0
-            
+
         # Medium confidence period (1-5 mins)
         if time_since_motion < 300:
             return 0.9
-            
+
         # Decay period (> 5 mins)
         # Decay from 0.9 down to 0.1 over 1 hour (3600s)
         k = 0.00021
         decay_time = time_since_motion - 300
         probability = 0.1 + 0.8 * math.exp(-k * decay_time)
-        
+
         return round(probability, 2)
 
     def get_warnings(self, active_only: bool = True) -> List[Warning]:
@@ -276,26 +272,26 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         # Reset all areas using proper reset method
         for area in self.areas.values():
             area.reset()
-        
+
         # Reset all sensors
         for sensor in self.sensors.values():
             sensor.reset()
-        
+
         self.occupancy_resolver.reset()
-        
+
         # Create new anomaly detector and state recorder
         self.anomaly_detector = AnomalyDetector(self.config)
         self.state_recorder.reset()
 
         _LOGGER.info("Occupancy tracker system reset")
         self.async_set_updated_data(self.diagnostics.get_system_status())
-    
+
     def rebuild_from_history(self) -> None:
         """Rebuild occupancy state from recorded history."""
         history = self.state_recorder.get_history()
         if not history:
             return
-        
+
         self.occupancy_resolver.recalculate_from_history(
             history,
             self.areas,
@@ -303,17 +299,17 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             self.anomaly_detector,
         )
         self._refresh_latest_snapshot_state()
-    
+
     def verify_history(self) -> bool:
         """
         Verify that recorded history matches replay (determinism check).
-        
+
         This compares the recorded occupancy state against what the current
         logic produces when replaying the same events. Useful for:
         - Detecting logic drift after code changes
         - Verifying bug fixes
         - Ensuring system determinism
-        
+
         Returns:
             True if history matches replay, False if differences found
         """
@@ -321,26 +317,29 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if not history:
             _LOGGER.info("No history to verify")
             return True
-        
+
         # Save current state
-        original_areas = {aid: (area.occupancy, area.last_motion) 
-                         for aid, area in self.areas.items()}
-        original_sensors = {sid: (sensor.current_state, sensor.last_changed)
-                           for sid, sensor in self.sensors.items()}
-        
+        original_areas = {
+            aid: (area.occupancy, area.last_motion) for aid, area in self.areas.items()
+        }
+        original_sensors = {
+            sid: (sensor.current_state, sensor.last_changed)
+            for sid, sensor in self.sensors.items()
+        }
+
         try:
             # Reset and replay
             for area in self.areas.values():
                 area.occupancy = 0
                 area.last_motion = 0
                 area.activity_history = []
-            
+
             for sensor in self.sensors.values():
                 sensor.current_state = False
                 sensor.history = []
-            
+
             self.occupancy_resolver.reset()
-            
+
             # Replay history
             self.occupancy_resolver.recalculate_from_history(
                 history,
@@ -348,7 +347,7 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 self.sensors,
                 None,  # Don't generate new warnings during verification
             )
-            
+
             # Verify
             verifier = HistoryVerifier()
             result = verifier.verify_history(
@@ -356,23 +355,23 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 self.areas,
                 self.sensors,
             )
-            
+
             # Log summary
             summary = verifier.get_summary()
             if not result:
                 _LOGGER.error(f"History verification failed: {summary}")
             else:
                 _LOGGER.info("History verification passed: system is deterministic")
-            
+
             return result
-            
+
         finally:
             # Restore original state
             for aid, (occ, motion) in original_areas.items():
                 if aid in self.areas:
                     self.areas[aid].occupancy = occ
                     self.areas[aid].last_motion = motion
-            
+
             for sid, (state, changed) in original_sensors.items():
                 if sid in self.sensors:
                     self.sensors[sid].current_state = state
@@ -385,43 +384,44 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
     async def _async_update_data(self) -> Dict[str, Any]:
         """
         Periodic update - runs every PERIODIC_UPDATE_INTERVAL.
-        
+
         This handles:
         1. Consistency resolution (active-but-empty areas)
         2. Timeout-based anomaly detection
         3. State refresh for sensors
         """
         timestamp = time.time()
-        
+
         # Capture state before processing
         old_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
-        
+
         # Run periodic consistency resolution
         # This catches cases where sensors are on but no occupant is assigned
         changes_made = self._run_periodic_consistency(timestamp)
-        
+
         # Check for timeout-based anomalies (stuck sensors, extended occupancy)
         self.anomaly_detector.check_timeouts(self.areas, timestamp)
-        
+
         # Log if occupancy changed
         if changes_made:
             new_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
             state_view = self.log_formatter.format_state_view(self.areas, self.sensors)
-            changes = self.log_formatter.format_occupancy_changes(old_occupancy, new_occupancy)
+            changes = self.log_formatter.format_occupancy_changes(
+                old_occupancy, new_occupancy
+            )
             if changes:
                 _LOGGER.info(f"⏱️ periodic | {changes} | {state_view}")
-        
+
         return self.diagnostics.get_system_status()
 
     def _run_periodic_consistency(self, timestamp: float) -> bool:
         """
         Run consistency checks during periodic updates.
-        
+
         This is different from event-driven consistency:
-        - We DON'T have a recent_move_target_id to protect
         - We CAN pull from stationary areas (if they've been active long enough)
         - We look for active-but-empty areas that need filling
-        
+
         Returns True if any changes were made.
         """
         return False  # Periodic consistency disabled in lean architecture

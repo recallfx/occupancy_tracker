@@ -29,7 +29,12 @@ def test_motion_off_ignores_stale_neighbor_activation():
     config = {
         "areas": {
             "front_hall": {"name": "Front Hall", "transition": True},
-            "frontyard": {"name": "Front Yard", "transition": True, "exit_capable": True, "indoors": False},
+            "frontyard": {
+                "name": "Front Yard",
+                "transition": True,
+                "exit_capable": True,
+                "indoors": False,
+            },
         },
         "adjacency": {
             "front_hall": ["frontyard"],
@@ -53,23 +58,39 @@ def test_motion_off_ignores_stale_neighbor_activation():
             "binary_sensor.frontyard", {"area": "frontyard", "type": "motion"}, now
         ),
         "binary_sensor.front_door": SensorState(
-            "binary_sensor.front_door", {"area": ["front_hall", "frontyard"], "type": "door"}, now
+            "binary_sensor.front_door",
+            {"area": ["front_hall", "frontyard"], "type": "door"},
+            now,
         ),
     }
 
     # Door opens (magnetic evidence for possible entry)
-    resolver.process_snapshot(_sensor_event("binary_sensor.front_door", True, now - 1), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.front_door", True, now - 1),
+        areas,
+        sensors,
+        detector,
+    )
 
     # Person in hall, hall motion turns on
-    resolver.process_snapshot(_sensor_event("binary_sensor.hall", True, now), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.hall", True, now), areas, sensors, detector
+    )
     assert areas["front_hall"].occupancy == 1
 
     # Much later, frontyard motion turns on (different person outside)
-    resolver.process_snapshot(_sensor_event("binary_sensor.frontyard", True, now + 100), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.frontyard", True, now + 100),
+        areas,
+        sensors,
+        detector,
+    )
     assert areas["frontyard"].occupancy == 1
 
     # Hall sensor finally turns off; since neighbor activation was long ago, hall should stay occupied
-    resolver.process_snapshot(_sensor_event("binary_sensor.hall", False, now + 110), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.hall", False, now + 110), areas, sensors, detector
+    )
 
     assert areas["front_hall"].occupancy == 1
     assert areas["frontyard"].occupancy == 1
@@ -107,10 +128,14 @@ def test_intrusion_warning_outdoor_then_indoor_motion():
     }
 
     # Outside motion starts first (unknown presence)
-    resolver.process_snapshot(_sensor_event("binary_sensor.frontyard", True, now), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.frontyard", True, now), areas, sensors, detector
+    )
 
     # Indoor motion follows shortly after with no indoor source
-    resolver.process_snapshot(_sensor_event("binary_sensor.foyer", True, now + 2), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.foyer", True, now + 2), areas, sensors, detector
+    )
 
     assert areas["foyer"].occupancy == 1
 
@@ -147,16 +172,24 @@ def test_outdoor_then_magnetic_then_indoor_suppresses_intrusion_warning():
             "binary_sensor.frontyard", {"area": "frontyard", "type": "motion"}, now
         ),
         "binary_sensor.door": SensorState(
-            "binary_sensor.door", {"area": ["foyer", "frontyard"], "type": "magnetic"}, now
+            "binary_sensor.door",
+            {"area": ["foyer", "frontyard"], "type": "magnetic"},
+            now,
         ),
         "binary_sensor.foyer": SensorState(
             "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
         ),
     }
 
-    resolver.process_snapshot(_sensor_event("binary_sensor.frontyard", True, now), areas, sensors, detector)
-    resolver.process_snapshot(_sensor_event("binary_sensor.door", True, now + 1), areas, sensors, detector)
-    resolver.process_snapshot(_sensor_event("binary_sensor.foyer", True, now + 2), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.frontyard", True, now), areas, sensors, detector
+    )
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.door", True, now + 1), areas, sensors, detector
+    )
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.foyer", True, now + 2), areas, sensors, detector
+    )
 
     assert areas["foyer"].occupancy == 1
     warnings = detector.get_warnings()
@@ -188,7 +221,12 @@ def test_indoor_activation_ignored_without_outdoor_or_magnet():
         ),
     }
 
-    resolver.process_snapshot(_sensor_event("binary_sensor.office_motion", True, now), areas, sensors, detector)
+    resolver.process_snapshot(
+        _sensor_event("binary_sensor.office_motion", True, now),
+        areas,
+        sensors,
+        detector,
+    )
 
     # No outdoor adjacency, so activation is allowed but still warned as unexplained
     assert areas["office"].occupancy == 1

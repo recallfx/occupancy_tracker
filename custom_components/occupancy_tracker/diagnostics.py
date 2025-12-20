@@ -74,9 +74,7 @@ class OccupancyDiagnostics:
                 in ["motion", "camera_motion", "camera_person"],
                 "current_state": sensor.current_state,
                 "area_id": area_id,
-                "area_exists": area_id in self.coordinator.areas
-                if area_id
-                else False,
+                "area_exists": area_id in self.coordinator.areas if area_id else False,
                 "history_length": len(sensor.history)
                 if hasattr(sensor, "history")
                 else "unknown",

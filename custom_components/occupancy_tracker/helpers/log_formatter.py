@@ -42,7 +42,9 @@ class LogFormatter:
         "area_c": "C",
     }
 
-    def __init__(self, areas: Dict[str, "AreaState"], sensors: Dict[str, "SensorState"]):
+    def __init__(
+        self, areas: Dict[str, "AreaState"], sensors: Dict[str, "SensorState"]
+    ):
         self.areas = areas
         self.sensors = sensors
         self._abbrevs = self._build_abbreviations()
@@ -59,11 +61,11 @@ class LogFormatter:
             else:
                 # Generate from area name
                 abbrev = self._generate_abbrev(area_id, used)
-            
+
             # Handle conflicts
             if abbrev in used:
                 abbrev = self._make_unique(abbrev, used)
-            
+
             abbrevs[area_id] = abbrev
             used.add(abbrev)
 
@@ -96,15 +98,15 @@ class LogFormatter:
         # motion_entrance -> entrance (remove common prefixes)
         for prefix in ["motion_", "person_", "magnetic_"]:
             if name.startswith(prefix):
-                name = name[len(prefix):]
+                name = name[len(prefix) :]
                 break
         return name
 
     def format_state(self, active_sensors: Optional[set] = None) -> str:
         """
         Format current occupancy state as compact string.
-        
-        Example: "Y E@ F B+@2 M L" 
+
+        Example: "Y E@ F B+@2 M L"
         - E@ = entrance occupied (1 person)
         - B+@2 = back_hall sensor active, 2 people
         """
@@ -115,15 +117,14 @@ class LogFormatter:
         for area_id in sorted(self.areas.keys(), key=lambda x: self._abbrevs.get(x, x)):
             area = self.areas[area_id]
             abbrev = self.abbrev(area_id)
-            
+
             # Check if any sensor in this area is active
             is_active = any(
-                self._sensor_in_area(sid, area_id) 
-                for sid in active_sensors
+                self._sensor_in_area(sid, area_id) for sid in active_sensors
             )
-            
+
             occ = area.occupancy
-            
+
             if is_active and occ > 0:
                 if occ == 1:
                     parts.append(f"{abbrev}+@")
@@ -138,7 +139,7 @@ class LogFormatter:
                     parts.append(f"{abbrev}@{occ}")
             else:
                 parts.append(abbrev)
-        
+
         return " ".join(parts)
 
     def format_occupied_only(self) -> str:
@@ -153,16 +154,18 @@ class LogFormatter:
                     parts.append(f"{abbrev}@{area.occupancy}")
         return " ".join(parts) if parts else "(empty)"
 
-    def format_move(self, source_id: str, target_id: str, old_source_occ: int, old_target_occ: int) -> str:
+    def format_move(
+        self, source_id: str, target_id: str, old_source_occ: int, old_target_occ: int
+    ) -> str:
         """Format a movement between areas."""
         src = self.abbrev(source_id)
         tgt = self.abbrev(target_id)
         src_area = self.areas.get(source_id)
         tgt_area = self.areas.get(target_id)
-        
+
         new_source_occ = src_area.occupancy if src_area else 0
         new_target_occ = tgt_area.occupancy if tgt_area else 0
-        
+
         return f"{src}→{tgt} ({src}:{old_source_occ}→{new_source_occ}, {tgt}:{old_target_occ}→{new_target_occ})"
 
     def format_entry(self, area_id: str, source: str = "outside") -> str:
@@ -172,7 +175,9 @@ class LogFormatter:
         occ = area.occupancy if area else 0
         return f"→{abbrev} (from {source}, now {occ})"
 
-    def format_sensor_trigger(self, sensor_id: str, state: bool, area_ids: List[str]) -> str:
+    def format_sensor_trigger(
+        self, sensor_id: str, state: bool, area_ids: List[str]
+    ) -> str:
         """Format a sensor trigger event."""
         name = self.sensor_name(sensor_id)
         state_str = "ON" if state else "OFF"
@@ -180,9 +185,7 @@ class LogFormatter:
         return f"{name}({areas})→{state_str}"
 
     def format_occupancy_changes(
-        self, 
-        old_occupancy: Dict[str, int], 
-        new_occupancy: Dict[str, int]
+        self, old_occupancy: Dict[str, int], new_occupancy: Dict[str, int]
     ) -> str:
         """Format occupancy changes between old and new state."""
         changes = []
@@ -195,9 +198,7 @@ class LogFormatter:
         return " ".join(changes)
 
     def format_state_view(
-        self, 
-        areas: Dict[str, "AreaState"], 
-        sensors: Dict[str, "SensorState"]
+        self, areas: Dict[str, "AreaState"], sensors: Dict[str, "SensorState"]
     ) -> str:
         """Format state view (update internal state first)."""
         self.areas = areas
