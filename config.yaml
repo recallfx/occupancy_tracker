@@ -8,22 +8,27 @@ areas:
   back_hall:
     name: back_Hall
     indoors: true
+    transition: true
   front_hall:
     name: front_Hall
     indoors: true
+    transition: true
   entrance:
     name: Entrance
     indoors: true
+    transition: true
   living:
     name: Living room
     indoors: true
   frontyard:
     name: Front yard
     indoors: false
+    transition: true
     exit_capable: true
   backyard:
     name: Back yard
     indoors: false
+    transition: true
     exit_capable: true
 
 adjacency:

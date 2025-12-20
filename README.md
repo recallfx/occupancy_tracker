@@ -1,203 +1,201 @@
 # Occupancy Tracker [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
-A sophisticated occupancy tracking integration that combines probabilistic state machine tracking with anomaly detection for reliable room presence detection.
+A sophisticated Home Assistant integration for reliable room presence detection using probabilistic state tracking and anomaly detection.
 
-## Core Features
+## Features
 
-- **Multi-Area Tracking**: 
-  - Track occupancy across interconnected areas
-  - Support for partial transitions and chain movements
-  - Configurable area connections through adjacency maps
-  - Special handling for exit-capable areas (e.g., frontyard, backyard)
+- **Smart Occupancy Tracking**: Maintains accurate room presence even during sleep or sedentary activities
+- **Multi-Area Support**: Track occupancy across interconnected rooms with adjacency validation
+- **Probability Confidence**: Dynamic scoring that decays over time (100% → 10% over 1 hour)
+- **Multiple Occupants**: Handles families and multi-person scenarios
+- **Exit Detection**: Automatic clearing for areas where people can leave the system (front door, backyard)
+- **Flexible Sensors**: Motion, magnetic (door/window), and camera detection
+- **Anomaly Detection**: Alerts for stuck sensors and unusual patterns
+- **Crash Recovery**: Rebuilds state from event history after restarts
 
-- **Robust Occupancy Detection**:
-  - Probabilistic occupancy scoring (0.05 to 0.95 confidence)
-  - Handles simultaneous multi-occupant scenarios
-  - Motion clearing time considerations (5s default threshold)
-  - Preserves occupancy during no-motion periods (e.g., sleep scenarios)
+## Quick Start
 
-- **Flexible Sensor Support**:
-  - Motion sensors in rooms
-  - Magnetic sensors for doors/windows
-  - External camera motion detection
-  - Multi-area bridging sensors (e.g., doorways between rooms)
-
-- **Built-in Anomaly Detection**:
-  - Long sensor activations (customizable threshold, default 300s)
-  - Impossible occupant appearances
-  - Suspicious transitions without adjacent presence
-  - Multi-occupant movement anomalies
-
-## Configuration
-
-The system requires a YAML configuration file defining:
+Add to your `configuration.yaml`:
 
 ```yaml
-areas:
-  room_id:
-    name: "Room Name"
-    exit_capable: true/false  # For areas like frontyard
-
-adjacency:
-  room_id: [adjacent_room_ids]
-
-sensors:
-  sensor_id:
-    area: room_id | [room_id1, room_id2]  # Single area or bridging
-    type: motion | magnetic | camera_motion | camera_person
+occupancy_tracker:
+  areas:
+    living_room:
+      name: "Living Room"
+    kitchen:
+      name: "Kitchen"
+    front_door:
+      name: "Front Door"
+      exit_capable: true  # People can leave the system from here
+  
+  adjacency:
+    living_room: [kitchen, front_door]
+    kitchen: [living_room]
+    front_door: [living_room]
+  
+  sensors:
+    binary_sensor.living_room_motion:
+      area: living_room
+      type: motion
+    binary_sensor.kitchen_motion:
+      area: kitchen
+      type: motion
+    binary_sensor.front_door:
+      area: [front_door, living_room]  # Bridging sensor
+      type: magnetic
 ```
 
-## Installation (with HACS)
+## Installation
 
-1. Add repository in HACS:
-   * **Repository**: `recallfx/occupancy_tracker`
-   * **Category**: Integration
+### Via HACS (Recommended)
 
-2. Install and restart Home Assistant
+1. Open HACS → Integrations
+2. Click "Explore & Download Repositories"
+3. Search for "Occupancy Tracker"
+4. Download and restart Home Assistant
+5. Add configuration to `configuration.yaml` (see Quick Start)
 
-3. Add configuration to your `configuration.yaml`:
-   ```yaml
-   occupancy_tracker:
-     areas:
-       # Your area definitions here
-     adjacency:
-       # Your adjacency map here
-     sensors:
-       # Your sensor definitions here
-   ```
+### Manual Installation
 
-## Installation (manual)
-
-1. Download latest release
-2. Copy to `custom_components/occupancy_tracker`
+1. Download the [latest release](https://github.com/recallfx/occupancy_tracker/releases)
+2. Extract to `custom_components/occupancy_tracker`
 3. Restart Home Assistant
-4. Add configuration to `configuration.yaml` as shown above
+4. Add configuration to `configuration.yaml`
 
-## Usage Example
+## Configuration Reference
+
+### Areas
+
+Define all rooms/spaces you want to track:
 
 ```yaml
 areas:
-  main_bathroom:
-    name: "Main Bathroom"
-  main_bedroom: 
-    name: "Main Bedroom"
-  frontyard:
-    name: "Front Yard"
-    exit_capable: true
+  area_id:
+    name: "Display Name"
+    exit_capable: false  # Optional: set true for entry/exit points
+```
 
+**Exit-capable areas** (front door, backyard, etc.) clear occupancy immediately when motion stops, unless movement to a neighbor is detected. They also have a 5-minute auto-clear fallback.
+
+### Adjacency Map
+
+Define which areas are physically connected:
+
+```yaml
 adjacency:
-  main_bathroom: [main_bedroom]
-  main_bedroom: [main_bathroom]
-  frontyard: []
+  living_room: [kitchen, hallway]
+  kitchen: [living_room, dining_room]
+  hallway: [living_room, bedroom]
+```
 
+The system automatically makes connections bidirectional.
+
+### Sensors
+
+Map your Home Assistant sensors to areas:
+
+```yaml
 sensors:
-  motion_main_bathroom:
-    area: main_bathroom
+  binary_sensor.living_room_motion:
+    area: living_room
     type: motion
-  motion_main_bedroom:
-    area: main_bedroom
-    type: motion
-  front_door_magnetic:
-    area: [frontyard, entrance]
+  
+  binary_sensor.front_door:
+    area: [entryway, front_porch]  # Bridging sensor
     type: magnetic
 ```
 
-## Detailed Functionality
+**Supported sensor types:**
+- `motion`: Standard motion sensors
+- `magnetic`: Door/window contacts
+- `camera_motion`: Camera motion detection
+- `camera_person`: Camera person detection
 
-### Occupancy Logic
-- Single occupant transitions between rooms are tracked with 95% confidence when confirmed
-- Multiple occupant tracking with preserved counts (e.g., if 2 occupants in bathroom, 1 moves to bedroom)
-- Chain movement tracking (e.g., bathroom → bedroom → hall) with probability degradation
-- Motion clearing reduces confidence but doesn't remove occupancy (75% confidence after clearing)
-- Exit-capable areas (like frontyard) automatically clear occupancy when motion stops
+## Entities Created
 
-### Sensor Behaviors
-- Motion sensors: Primary room presence detection
-- Magnetic sensors: Handles bi-directional transitions between areas
-- Multi-area sensors: Support partial occupancy distribution
-- Default thresholds:
-  - Short transitions: 5 seconds (configurable)
-  - Long detections: 300 seconds (configurable)
+For each configured area, the integration creates:
 
-### Anomaly Detection
-- Long sensor activations (>300s) flagged as potential stuck sensors
-- Impossible appearances detected when occupancy appears without adjacent presence
-- Exit-capable areas excluded from impossible appearance detection
-- Transitions validated against adjacency map
+- `binary_sensor.occupancy_tracker_{area_id}` - ON when occupied
+- `sensor.occupancy_tracker_{area_id}_probability` - Confidence score (0.0-1.0)
 
-### Entity Types Provided
-- **Occupancy Sensors**: Binary sensors indicating presence in each area
-- **Probability Sensors**: Numeric sensors (0.05-0.95) indicating confidence level
-- **Warning Sensors**: Text sensors showing any detected anomalies
-- **Reset Button**: Entity to reset the system or clear warnings
+System-wide entities:
 
-## System Components
+- `sensor.occupancy_tracker_warnings` - Active anomaly alerts
+- `button.occupancy_tracker_reset_warnings` - Clear warnings
+- `button.occupancy_tracker_reset_system` - Full system reset
 
-### OccupancyTracker
-The core system that processes sensor events, tracks occupancy across areas, and manages the system state.
+## How It Works
 
-### AreaState
-Manages the state of each configured area including:
-- Current occupancy count
-- Last motion timestamp
-- Whether the area is exit-capable
-- Activity history
+The system uses an event-driven probabilistic state machine:
 
-### SensorState
-Tracks individual sensor states including:
-- Current state (active/inactive)
-- History of activations
-- Reliability metrics
-- Areas the sensor covers
+1. **Motion detected (ON)** → Marks area occupied immediately. Checks adjacent rooms for a "plausible source" (occupancy or active motion) and flags anomalies if none found.
+2. **Motion cleared (OFF)** → Checks if an adjacent room activated *after* this room turned ON. If so, moves the occupant to the neighbor. If not, the person is assumed to have stayed.
+3. **Confidence decay** → Probability drops over time without motion (100% → 10% over 1 hour), but occupancy remains until movement is detected.
+4. **Exit detection** → Clears exit-capable areas (front door, backyard) immediately when motion stops (with a 5-minute auto-clear fallback).
+5. **Anomaly alerts** → Flags impossible movements, stuck sensors, or extended occupancy (12h+).
 
-### AnomalyDetector
-Responsible for detecting unusual patterns:
-- Stuck sensors
-- Impossible appearances
-- Suspicious transitions
-- Simultaneous multi-area motion
+For technical details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-### SensorAdjacencyTracker
-Manages relationships between sensors and areas:
-- Tracks motion across adjacent areas
-- Validates transitions based on adjacency map
-- Records motion history for anomaly detection
+## Troubleshooting
 
-## Handling Special Cases
+**Lights not turning on?**
+- Check for "Unexpected Motion" warnings in `sensor.occupancy_tracker_warnings`
+- Verify the area is in your adjacency map
+- Ensure adjacent areas have sensors
 
-### Sleep Scenarios
-The system maintains occupancy even during extended periods without motion, allowing for accurate tracking during sleep or sedentary activities.
+**Occupancy stuck?**
+- Look for stuck sensor warnings
+- Check if the area is exit-capable (should auto-clear after 5 min)
+- Use the reset button to clear stale state
 
-### Multi-Occupant Homes
-Tracks individual occupants moving between spaces with distinct probability scores for reliable family tracking.
-
-### Resetting the System
-Two reset options are available:
-- **Reset Anomalies**: Clears warnings without affecting occupancy state
-- **Full Reset**: Resets all occupancy counts, sensor states, and warnings
+**Erratic behavior?**
+- Review your adjacency map (are all connections defined?)
+- Check sensor entity IDs match your configuration
+- Enable debug logging: `logger: custom_components.occupancy_tracker: debug`
 
 ## Development
 
-### Requirements
-- Python 3.13+
-- PyYAML for configuration handling
-- `uv` for package management and environment
-- `ruff` for code linting
+### Setup
 
-### Testing
-The project includes comprehensive test suites:
-- `test_occupancy_tracker.py`: Core movement and transition logic
-- `test_anomaly_detector.py`: Anomaly detection validation
-- `test_sensor_adjacency_tracker.py`: Adjacency mapping validation
-- `test_config_validator.py`: Configuration validation
+```bash
+# Clone repository
+git clone https://github.com/recallfx/occupancy_tracker.git
+cd occupancy_tracker
 
-### Configuration Validation
-The system validates:
-- All areas are properly defined in adjacency maps
-- Each area has at least one sensor
-- Sensor areas match defined areas
-- Multi-area sensors bridge valid adjacent spaces
+# Install dependencies (requires uv)
+uv sync
+```
+
+### Running Tests
+
+```bash
+# All tests
+uv run pytest tests/ -v
+
+# Unit tests only
+uv run pytest tests/occupancy_tracker/ -v
+
+# Integration tests only
+uv run pytest tests/integration/ -v
+
+# With coverage
+uv run pytest --cov=custom_components.occupancy_tracker
+```
+
+See [tests/integration/README.md](tests/integration/README.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for more details.
+
+## Contributing
+
+Contributions welcome! Please:
+1. Open an issue to discuss major changes
+2. Follow existing code style (ruff formatting)
+3. Add tests for new features
+4. Update documentation as needed
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file
 
 ## Credits
 
-Inspired by Home Assistant community
+Built for the Home Assistant community

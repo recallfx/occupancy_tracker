@@ -1,69 +1,118 @@
 # AI Agent Instructions
 
+> **READ THIS FIRST**: This document contains critical context for working on this codebase. Review relevant sections before making changes. Update the "Session Log" section when you make significant decisions or discoveries.
+
 ## Architecture overview
 
-This Home Assistant integration uses a modular coordinator pattern with five independent components. The coordinator (`motion_coordinator.py`) wires components together but delegates all logic to specialized modules:
+Home Assistant integration for room presence detection using probabilistic state tracking. Event-driven, not polling.
 
-- `state_machine.py` - manages transitions between 7 states (IDLE, MOTION_AUTO, AUTO, MANUAL, MOTION_MANUAL, MANUAL_OFF, OVERRIDDEN)
-- `timer_manager.py` - handles motion timers (short) and extended timers (long) with lifecycle management
-- `light_controller.py` - controls lights using pluggable brightness and selection strategies
-- `triggers.py` - event handlers for motion sensors and override switches, extensible via TriggerHandler base class
-- `manual_detection.py` - detects when users manually adjust lights using configurable strategies
+**Core flow**: HA sensor events → `__init__.py:state_change_listener` → `coordinator.process_sensor_event()` → `MapOccupancyResolver.process_snapshot()` → state mutations → `async_set_updated_data()`
 
-The coordinator initializes modules in `__init__`, wires callbacks in `async_setup_listeners()`, and delegates state transitions to the state machine. Components communicate through callbacks, not direct method calls.
+**Key components**:
+- `OccupancyCoordinator` (`coordinator.py`): Owns all state (`self.areas`, `self.sensors`), orchestrates helpers.
+- `MapOccupancyResolver` (`helpers/map_occupancy_resolver.py`): Stateless logic engine - processes snapshots, mutates AreaState in-place. Uses an **activation-window model** for movement.
+- `AreaState` / `SensorState` (`helpers/`): Data models with occupancy counts, timestamps, activity history.
+- `AnomalyDetector` (`helpers/anomaly_detector.py`): Generates warnings for stuck sensors, impossible movements, and timeouts.
+- `MapStateRecorder`: Captures immutable snapshots for history replay and crash recovery.
+
+**Key principle**: Occupancy is an integer counter. People move via adjacency map. Movement is only confirmed when a sensor turns OFF and a neighbor has a matching activation window.
+
+## Configuration
+
+YAML-only via `async_setup` in `__init__.py`. **No Config Flow**.
+
+```yaml
+occupancy_tracker:
+  areas:
+    living_room:
+      name: "Living Room"
+      exit_capable: false  # true for front doors, backyards
+      indoors: true        # false for yards, porches
+  adjacency:
+    living_room: [kitchen, hallway]  # auto-bidirectional
+  sensors:
+    binary_sensor.living_room_motion:
+      area: living_room  # or [area1, area2] for bridging sensors
+      type: motion  # motion, magnetic, camera_motion, camera_person
+```
+
+Schema validated with voluptuous. Coordinator stored at `hass.data[DOMAIN]["coordinator"]`.
+
+## Testing
+
+```bash
+uv run pytest tests/                    # all tests
+uv run pytest tests/occupancy_tracker/  # unit tests
+uv run pytest tests/integration/        # integration tests
+uv run pytest -v -m end_to_end          # by marker
+```
+
+**Test organization**: Mirrors source structure. Unit tests in `tests/occupancy_tracker/`, integration in `tests/integration/`.
+
+**Test patterns** (see `tests/integration/test_fixtures.py`):
+- `SensorEventHelper` for triggering events with timestamps
+- `assert_occupancy_state(coordinator, {"living": 1, "kitchen": 0})`
+- Fixtures: `hass_with_realistic_config`, `hass_with_simple_config`
+
+**Unit test pattern**: Mock `HomeAssistant`, pass config dict directly to `OccupancyCoordinator(hass, config)`.
 
 ## Critical patterns
 
-**Motion activation disabled behavior**: When `motion_activation=False`, the MotionTrigger still fires callbacks (lines 141-169 in `triggers.py`). The coordinator handles this in `_handle_motion_on()` by resetting the extended timer without transitioning states. This prevents lights from turning off after 20 minutes when a room is actively used but motion shouldn't auto-enable lights.
+**Motion-ON**: Mark area occupied immediately (leading activation). Check adjacent areas for "plausible source" (occupied or active). If none found, flag anomaly (e.g., `no_adjacent_source`) but still add occupancy.
 
-**State machine transitions**: Use `StateTransitionEvent` enum values, not raw strings. The state machine validates transitions and prevents invalid ones. Always check `state_machine.py` lines 40-80 for the transition table before adding new transitions.
+**Motion-OFF**: Person STAYS unless an adjacent sensor activated *after* this area turned ON and *before/at* this area turned OFF. If valid neighbor(s) found, move occupancy (clear source, mark targets). Supports multi-hop through active paths.
 
-**Timer management**: The TimerManager uses `TimerType` enum (MOTION, EXTENDED, CUSTOM). Access timers by name string, not type. Use `has_active_timer(name)` not `is_timer_active()`. Timer start times are private (`_start_time`) - use `end_time` property or `remaining_seconds` instead.
+**Consistency resolution**: Periodic consistency checks are **disabled** in the lean architecture. Logic is purely event-driven.
 
-**Light context tracking**: The LightController tracks which context IDs originated from the integration using `is_integration_context()`. This distinguishes automation-triggered changes from manual interventions. Context cleanup happens every hour via `_schedule_periodic_cleanup()`.
+**Probability decay**: 100% → 90% → exponential decay to 10% over ~1 hour. Formula in `get_occupancy_probability()`.
 
-## Testing commands
+## Simulation
 
-Run tests with `uv run pytest tests/` (not `pytest` directly - uv manages the environment). Tests use pytest-homeassistant-custom-component which provides fixtures like `hass` and `MockConfigEntry`.
+Interactive web UI for testing: `python -m simulation.server` then open http://localhost:8080
 
-For new test files, use `ConfigEntry` from `homeassistant.config_entries`, not a custom mock. Required parameters: version, minor_version, domain, title, data, options, entry_id, source, unique_id, discovery_keys.
-
-Always call `coordinator.async_cleanup_listeners()` in test teardown to prevent lingering timer errors. The test framework checks for uncanceled timers.
-
-## Extension patterns
-
-Add new triggers by subclassing `TriggerHandler` (see `triggers.py` lines 19-100). Implement `async_setup()`, `is_active()`, and `get_info()`. Register with `trigger_manager.add_trigger(name, instance)`.
-
-Add brightness logic by subclassing `BrightnessStrategy` and implementing `get_brightness(context)`. Context dict includes `is_house_active`, `is_dark_inside`, `motion_active`. Register with `light_controller.set_brightness_strategy()`.
-
-Add manual detection logic by subclassing `ManualInterventionStrategy`. The base class provides `is_integration_context()`. Return tuple of (is_manual: bool, reason: str) from `is_manual_intervention()`.
-
-## Config flow specifics
-
-The config flow uses two steps: basic setup collects entities, advanced setup collects timeouts and brightness. Use `vol.All(cv.ensure_list, [cv.entity_id])` for multi-entity fields, not `vol.Any()`.
-
-Entity validation happens in `_validate_input()` which checks for at least one light type. Don't validate entity existence - Home Assistant handles that.
-
-Reconfiguration reuses the same flow with pre-filled data. Use `self.config_entry.data.get(key, default)` when building schemas.
+Uses `SimOccupancyCoordinator` wrapping the real coordinator, loads from `config.yaml`.
 
 ## Common pitfalls
 
-Don't check `trigger.enabled` in `_async_motion_changed()` - always fire callbacks. The coordinator decides whether to act based on `motion_activation`.
+- Don't poll - system is event-driven. Use `async_set_updated_data()` after state changes.
+- Adjacency is auto-bidirectional.
+- `exit_capable` areas auto-clear after 5min.
+- `indoors` defaults to true; set false for outdoor areas to improve anomaly detection.
+- Sensor entity IDs must match HA format (`binary_sensor.xyz`).
+- State is mutable - `MapOccupancyResolver` modifies `AreaState` objects directly.
 
-Don't use `timer.start_time` - it's private. Use `timer.end_time` or `timer.remaining_seconds` instead.
+## Writing style
 
-Don't import from `homeassistant.components.occupancy_tracker` - this is a custom component, use `custom_components.occupancy_tracker`.
+Write like a human. Avoid flowery language, summary phrases, vague statements, and common AI patterns. Be direct and specific.
 
-The state sensor updates via `coordinator.async_update_listeners()`, not by calling `async_write_ha_state()` directly. The coordinator maintains `self.data` dict which sensors read.
+---
 
-## File organization
+## Session Log
 
-Tests mirror the source structure: `tests/occupancy_tracker/test_*.py` corresponds to `custom_components/occupancy_tracker/*.py`. Use `conftest.py` for shared fixtures.
+Document significant decisions, findings, and context that future sessions need to know. Most recent entries first.
 
-The `occupancy_tracker_rig` is a test helper integration that provides mock entities. Don't modify it unless adding new entity types for testing.
+### 2025-12-20: Activation-Window Refactor
+- Refactored `MapOccupancyResolver` to use an activation-window model.
+- Movement now happens on **Motion-OFF** if a neighbor activated after the source turned ON.
+- **Motion-ON** now only records entry and checks for plausible sources (anomalies).
+- Periodic consistency checks disabled to simplify logic and improve predictability.
+- Added `indoors` config for areas to better detect outdoor-to-indoor intrusions.
 
-Constants go in `const.py` using uppercase names. State strings use lowercase with hyphens (STATE_MOTION_AUTO = "motion-auto").
+### 2025-12-20: Simulation reset control
+- Added simulation reset command via WebSocket and UI button in the simulator header
+- Reset flow clears backend areas/sensors/history and resets local draggable people/input system (exits history mode first)
+- Use the "Reset State" button (requires active WS connection)
 
-## Readme writing style
+### 2024-11-26: Instructions file created
+- Established architecture documentation with core flow, components, and patterns
+- Key insight: `MapOccupancyResolver` is stateless and mutates `AreaState` in-place
+- The old `AreaManager`/`SensorManager` classes no longer exist - coordinator owns state directly
+- Motion-OFF logic is critical: person STAYS by default, only moves with explicit evidence
 
-Write like a human, not an AI. Avoid flowery language, summary phrases, generic lists, vague statements, and common AI patterns. Use clear, accurate, and natural language with real-world detail and nuance.
+### Template for new entries
+```
+### YYYY-MM-DD: Brief title
+- What was decided/discovered
+- Why it matters
+- Any gotchas or follow-ups
+```

@@ -9,10 +9,12 @@ dependencies = [
     "pytest-cov>=6.0.0",
     "pytest-homeassistant-custom-component>=0.13.45",
     "ruff>=0.8.0",
+    "syrupy>=4.0.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 norecursedirs = [".git"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

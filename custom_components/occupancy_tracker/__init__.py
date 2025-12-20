@@ -8,29 +8,36 @@ import voluptuous as vol
 from homeassistant.core import Event, HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
-from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
+from datetime import timedelta
 
-from .components.types import OccupancyTrackerConfig
-from .occupancy_tracker import OccupancyTracker
+from .const import DOMAIN
+from .helpers.types import OccupancyTrackerConfig
+from .coordinator import OccupancyCoordinator
 
-_LOGGER = logging.getLogger(__name__)
-DOMAIN = "occupancy_tracker"
+_LOGGER = logging.getLogger("occupancy_tracker")
 
 # Schema for individual sensor configuration
 SENSOR_SCHEMA = vol.Schema(
     {
         vol.Required("area"): vol.Any(cv.string, [cv.string]),
         vol.Optional("type", default="motion"): cv.string,
-    }
+        vol.Optional("between_areas"): vol.All([cv.string]),
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 # Schema for individual area configuration
 AREA_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Optional("name"): cv.string,
+        vol.Optional("indoors", default=True): cv.boolean,
         vol.Optional("exit_capable", default=False): cv.boolean,
-    }
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 # Main configuration schema
@@ -62,12 +69,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "sensors": conf.get("sensors", {}),
     }
 
-    # Create the occupancy system instance.
-    occupancy_tracker = OccupancyTracker(
-        occupancy_config,
-    )
+    # Validate configuration
+    if not _validate_config(occupancy_config):
+        return False
 
-    hass.data[DOMAIN] = {"occupancy_tracker": occupancy_tracker}
+    # Create the coordinator instance.
+    coordinator = OccupancyCoordinator(hass, occupancy_config)
+
+    # Store the coordinator
+    hass.data[DOMAIN] = {"coordinator": coordinator}
 
     async def state_change_listener(event: Event) -> None:
         """Handle state changes for sensors."""
@@ -88,15 +98,38 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             # Interpret HA state: 'on' becomes True; any other value is False
             sensor_state = new_state.state.lower() == "on"
             timestamp = time.time()
-            occupancy_tracker.process_sensor_event(
+
+            # Process event through coordinator
+            coordinator.process_sensor_event(
                 entity_id, sensor_state, timestamp=timestamp
             )
-            async_dispatcher_send(hass, f"{DOMAIN}_update")
 
     # Set up state listeners for each sensor entity defined in the occupancy config.
     sensor_entities = list(occupancy_config.get("sensors", {}).keys())
     if sensor_entities:
         async_track_state_change_event(hass, sensor_entities, state_change_listener)
+
+    # Set up periodic check for timeouts (every 60 seconds)
+    # Note: The coordinator also has a 5-second update_interval for consistency checks.
+    # This 60-second check is specifically for longer-term anomalies.
+    async def interval_listener(now) -> None:
+        """Handle periodic checks."""
+        coordinator.check_timeouts(timestamp=now.timestamp())
+
+    remove_interval = async_track_time_interval(
+        hass, interval_listener, timedelta(seconds=60)
+    )
+    hass.data[DOMAIN]["remove_update_listener"] = remove_interval
+
+    # Ensure timer is cleaned up when HA stops
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    async def _cleanup_timer(event):
+        remove_interval()
+        # Also stop the coordinator's periodic updates
+        await coordinator.async_shutdown()
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _cleanup_timer)
 
     # Set up the sensor platform
     await async_load_platform(hass, "sensor", DOMAIN, {}, config)
@@ -105,4 +138,48 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     await async_load_platform(hass, "button", DOMAIN, {}, config)
 
     _LOGGER.info("Occupancy Tracker integration set up successfully")
+    return True
+
+
+def _validate_config(config: OccupancyTrackerConfig) -> bool:
+    """Validate that all referenced areas exist."""
+    areas = config.get("areas", {})
+    adjacency = config.get("adjacency", {})
+    sensors = config.get("sensors", {})
+
+    # Validate adjacency
+    for area_id, adjacent_areas in adjacency.items():
+        if area_id not in areas:
+            _LOGGER.error(f"Adjacency config references unknown area: {area_id}")
+            return False
+        for adj_id in adjacent_areas:
+            if adj_id not in areas:
+                _LOGGER.error(
+                    f"Adjacency config for {area_id} references unknown area: {adj_id}"
+                )
+                return False
+
+    # Validate sensors
+    for sensor_id, sensor_config in sensors.items():
+        area_config = sensor_config.get("area")
+        if area_config:
+            area_ids = area_config if isinstance(area_config, list) else [area_config]
+            for area_id in area_ids:
+                if area_id not in areas:
+                    _LOGGER.error(
+                        f"Sensor {sensor_id} references unknown area: {area_id}"
+                    )
+                    return False
+
+        # Validate between_areas for magnetic sensors
+        if sensor_config.get("type") == "magnetic":
+            between = sensor_config.get("between_areas")
+            if between:
+                for area_id in between:
+                    if area_id not in areas:
+                        _LOGGER.error(
+                            f"Sensor {sensor_id} between_areas references unknown area: {area_id}"
+                        )
+                        return False
+
     return True

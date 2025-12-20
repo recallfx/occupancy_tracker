@@ -2,14 +2,15 @@
 
 import time
 
-from custom_components.occupancy_tracker.components.anomaly_detector import (
+from custom_components.occupancy_tracker.helpers.anomaly_detector import (
     AnomalyDetector,
 )
-from custom_components.occupancy_tracker.components.area_state import AreaState
-from custom_components.occupancy_tracker.components.sensor_state import SensorState
-from custom_components.occupancy_tracker.components.sensor_adjacency_tracker import (
-    SensorAdjacencyTracker,
+from custom_components.occupancy_tracker.helpers.area_state import AreaState
+from custom_components.occupancy_tracker.helpers.map_occupancy_resolver import (
+    MapOccupancyResolver,
 )
+from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSnapshot
+from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
 
 
 class TestAnomalyDetector:
@@ -150,161 +151,6 @@ class TestAnomalyDetector:
         assert warnings[0].type == "stuck_sensor"
         assert "sensor.motion_kitchen" in warnings[0].message
 
-    def test_handle_unexpected_motion_with_adjacent_occupied(self):
-        """Test handling unexpected motion when adjacent area is occupied."""
-        config = {
-            "areas": {
-                "living_room": {"name": "Living Room"},
-                "kitchen": {"name": "Kitchen"},
-            },
-            "adjacency": {"kitchen": ["living_room"]},
-            "sensors": {},
-        }
-        detector = AnomalyDetector(config)
-
-        timestamp = time.time()
-
-        # Setup areas
-        areas = {
-            "living_room": AreaState("living_room", {"name": "Living Room"}),
-            "kitchen": AreaState("kitchen", {"name": "Kitchen"}),
-        }
-
-        # Living room is occupied with recent motion
-        areas["living_room"].occupancy = 1
-        areas["living_room"].record_motion(timestamp - 10)
-
-        sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
-
-        # Kitchen has unexpected motion but living room (adjacent) is occupied
-        result = detector.handle_unexpected_motion(
-            areas["kitchen"], areas, sensors, timestamp, adjacency_tracker
-        )
-
-        # Should be valid entry (moving from living room to kitchen)
-        assert result is True
-        # Living room occupancy should decrease
-        assert areas["living_room"].occupancy == 0
-
-    def test_handle_unexpected_motion_exit_capable_area(self):
-        """Test handling unexpected motion in exit-capable area."""
-        config = {
-            "areas": {
-                "front_porch": {"name": "Front Porch", "exit_capable": True},
-            },
-            "adjacency": {},
-            "sensors": {},
-        }
-        detector = AnomalyDetector(config)
-
-        timestamp = time.time()
-
-        areas = {
-            "front_porch": AreaState(
-                "front_porch", {"name": "Front Porch", "exit_capable": True}
-            ),
-        }
-
-        sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
-
-        # Entry from outside in exit-capable area is valid
-        detector.handle_unexpected_motion(
-            areas["front_porch"], areas, sensors, timestamp, adjacency_tracker
-        )
-
-        # Should still not be considered an anomaly (valid external entry)
-        # But warnings may still be created for logging
-
-    def test_handle_unexpected_motion_creates_warning(self):
-        """Test that unexpected motion creates a warning when no valid path."""
-        config = {
-            "areas": {
-                "bedroom": {"name": "Bedroom", "exit_capable": False},
-            },
-            "adjacency": {},
-            "sensors": {},
-        }
-        detector = AnomalyDetector(config)
-
-        timestamp = time.time()
-
-        areas = {
-            "bedroom": AreaState("bedroom", {"name": "Bedroom"}),
-        }
-
-        sensors = {}
-        adjacency_tracker = SensorAdjacencyTracker()
-
-        # Bedroom has unexpected motion with no adjacent occupied areas
-        detector.handle_unexpected_motion(
-            areas["bedroom"], areas, sensors, timestamp, adjacency_tracker
-        )
-
-        # Should create warning
-        warnings = detector.get_warnings()
-        assert len(warnings) == 1
-        assert warnings[0].type == "unexpected_motion"
-        assert "bedroom" in warnings[0].message
-
-    def test_check_simultaneous_motion_adjacent_areas(self):
-        """Test that simultaneous motion in adjacent areas doesn't create warning."""
-        config = {
-            "areas": {
-                "living_room": {"name": "Living Room"},
-                "kitchen": {"name": "Kitchen"},
-            },
-            "adjacency": {"living_room": ["kitchen"]},
-            "sensors": {},
-        }
-        detector = AnomalyDetector(config)
-
-        timestamp = time.time()
-
-        areas = {
-            "living_room": AreaState("living_room", {"name": "Living Room"}),
-            "kitchen": AreaState("kitchen", {"name": "Kitchen"}),
-        }
-
-        # Both have recent motion but they're adjacent
-        areas["kitchen"].record_motion(timestamp - 5)
-
-        detector.check_simultaneous_motion("living_room", areas, timestamp)
-
-        # Should not create warning for adjacent areas
-        warnings = detector.get_warnings()
-        assert len(warnings) == 0
-
-    def test_check_simultaneous_motion_non_adjacent_areas(self):
-        """Test that simultaneous motion in non-adjacent areas creates warning."""
-        config = {
-            "areas": {
-                "living_room": {"name": "Living Room"},
-                "bedroom": {"name": "Bedroom"},
-            },
-            "adjacency": {"living_room": []},  # Not adjacent
-            "sensors": {},
-        }
-        detector = AnomalyDetector(config)
-
-        timestamp = time.time()
-
-        areas = {
-            "living_room": AreaState("living_room", {"name": "Living Room"}),
-            "bedroom": AreaState("bedroom", {"name": "Bedroom"}),
-        }
-
-        # Both have recent motion (within 10 seconds) but not adjacent
-        areas["bedroom"].record_motion(timestamp - 5)
-
-        detector.check_simultaneous_motion("living_room", areas, timestamp)
-
-        # Should create warning
-        warnings = detector.get_warnings()
-        assert len(warnings) == 1
-        assert warnings[0].type == "simultaneous_motion"
-
     def test_check_timeouts_inactivity_reset(self):
         """Test that areas are reset after 24 hours of inactivity."""
         config = {"areas": {}, "adjacency": {}, "sensors": {}}
@@ -377,6 +223,44 @@ class TestAnomalyDetector:
         # Should only have one warning
         warnings = detector.get_warnings()
         assert len(warnings) == 1
+
+    def test_unexpected_activation_warns_when_no_adjacent_source(self):
+        """Unexpected motion in an empty non-exit area creates a warning."""
+        timestamp = time.time()
+        config = {
+            "areas": {"back_hall": {"name": "Back Hall"}},
+            "adjacency": {},
+            "sensors": {},
+        }
+
+        resolver = MapOccupancyResolver(config)
+        detector = AnomalyDetector(config)
+
+        areas = {
+            "back_hall": AreaState("back_hall", config["areas"]["back_hall"]),
+        }
+        sensors = {
+            "binary_sensor.back": SensorState(
+                "binary_sensor.back",
+                {"area": "back_hall", "type": "motion"},
+                timestamp,
+            )
+        }
+
+        snapshot = MapSnapshot(
+            timestamp=timestamp,
+            event_type="sensor",
+            description="sensor:binary_sensor.back:on",
+            areas={},
+            sensors={},
+        )
+
+        resolver.process_snapshot(snapshot, areas, sensors, detector)
+
+        warnings = detector.get_warnings()
+        assert len(warnings) == 1
+        assert warnings[0].type == "unexpected_motion"
+        assert warnings[0].area == "back_hall"
 
     def test_check_timeouts_recent_activity_no_warning(self):
         """Test that recent activity doesn't trigger warnings."""

@@ -1172,6 +1172,7 @@ dependencies = [
     { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component" },
     { name = "ruff" },
+    { name = "syrupy" },
 ]
 
 [package.metadata]
@@ -1182,6 +1183,7 @@ requires-dist = [
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-homeassistant-custom-component", specifier = ">=0.13.45" },
     { name = "ruff", specifier = ">=0.8.0" },
+    { name = "syrupy", specifier = ">=4.0.0" },
 ]
 
 [[package]]
