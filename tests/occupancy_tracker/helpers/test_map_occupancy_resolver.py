@@ -1038,13 +1038,16 @@ def test_three_people_converge():
     assert areas["area_c"].occupancy == 0
     assert areas["area_d"].occupancy == 2, "D should have p1 + p2"
 
+    # D sensor cycles OFF (person 1 sits still, KNX 5s timeout)
+    _fire(resolver, sensors, areas, "binary_sensor.d", False, now + 106, detector)
+
     # Step 2: p3 moves B→C. C triggers, B OFF
     _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 110, detector)
     _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 111, detector)
     assert areas["area_b"].occupancy == 0
     assert areas["area_c"].occupancy == 1, "p3 now in C"
 
-    # Step 3: p3 moves C→D. D re-triggers, C OFF
+    # Step 3: p3 moves C→D. D re-triggers (fresh activated_at), C OFF
     _fire(resolver, sensors, areas, "binary_sensor.d", True, now + 120, detector)
     _fire(resolver, sensors, areas, "binary_sensor.c", False, now + 121, detector)
     assert areas["area_c"].occupancy == 0
@@ -1718,3 +1721,109 @@ def test_exit_capable_timeout_clears_even_with_motion():
     warnings = detector.get_warnings()
     has_exit_clear_warning = any(w.type == "exit_area_auto_clear" for w in warnings)
     assert has_exit_clear_warning
+
+
+# ---------------------------------------------------------------------------
+# 2F: Fallback negative-delta guard
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_rejects_neighbor_activated_before_source():
+    """Fallback must not treat a long-running neighbor as movement evidence.
+
+    If neighbor activated BEFORE source_on_time, the delta is negative and
+    must be rejected. Without the guard, (negative <= 30) is always True.
+    """
+    now = time.time()
+    config = {
+        "areas": {
+            "area_a": {"name": "A", "indoors": True},
+            "area_b": {"name": "B", "indoors": True},
+        },
+        "adjacency": {
+            "area_a": ["area_b"],
+            "area_b": ["area_a"],
+        },
+        "sensors": {},
+    }
+
+    resolver = MapOccupancyResolver(config)
+    detector = AnomalyDetector(config)
+
+    areas = {
+        "area_a": AreaState("area_a", config["areas"]["area_a"]),
+        "area_b": AreaState("area_b", config["areas"]["area_b"]),
+    }
+    sensors = {
+        "binary_sensor.a": SensorState(
+            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
+        ),
+        "binary_sensor.b": SensorState(
+            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
+        ),
+    }
+
+    # A has been active since t=0 (long-running, e.g. stuck or slow PIR)
+    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
+    assert areas["area_a"].occupancy == 1
+
+    # B activates much later at t=50
+    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 50, detector)
+    assert areas["area_b"].occupancy == 1
+
+    # B turns OFF at t=55. A is still active (ON since t=0).
+    # Primary check: A.activated_at=now(t=0), source_on=50. 50 < 0? No → skipped.
+    # Fallback: A is active and occupied.
+    #   _activation_matches_window(0): 0 <= 50 (source_on)? YES → rejected by guard.
+    # Person should STAY in B.
+    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 55, detector)
+
+    assert areas["area_b"].occupancy == 1, (
+        "Person must stay in B; A's pre-existing activation is not movement evidence"
+    )
+    assert areas["area_a"].occupancy == 1, "A should not be incremented"
+
+
+def test_fallback_accepts_neighbor_activated_after_source():
+    """Fallback should still work for legitimate slow movement."""
+    now = time.time()
+    config = {
+        "areas": {
+            "area_a": {"name": "A", "indoors": True},
+            "area_b": {"name": "B", "indoors": True},
+        },
+        "adjacency": {
+            "area_a": ["area_b"],
+            "area_b": ["area_a"],
+        },
+        "sensors": {},
+    }
+
+    resolver = MapOccupancyResolver(config)
+    detector = AnomalyDetector(config)
+
+    areas = {
+        "area_a": AreaState("area_a", config["areas"]["area_a"]),
+        "area_b": AreaState("area_b", config["areas"]["area_b"]),
+    }
+    sensors = {
+        "binary_sensor.a": SensorState(
+            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
+        ),
+        "binary_sensor.b": SensorState(
+            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
+        ),
+    }
+
+    # Person in A since t=0
+    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
+    assert areas["area_a"].occupancy == 1
+
+    # A turns OFF at t=5 (KNX 5s timeout), no neighbor yet → person stays
+    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 5, detector)
+    assert areas["area_a"].occupancy == 1
+
+    # B activates at t=8 (person finally reaches B, 3s after A went off)
+    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 8, detector)
+    # B gets occupancy from its own motion-ON (A is adjacent and occupied)
+    assert areas["area_b"].occupancy == 1

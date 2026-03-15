@@ -384,7 +384,11 @@ class MapOccupancyResolver:
         # Helper: decide if a neighbor activation is fresh enough to count as movement evidence
         # We accept either: (a) activation very close to the OFF timestamp, or
         # (b) activation that happened shortly after the source turned ON (common with long sensor timeouts).
+        # CRITICAL: neighbor must have activated AFTER source turned ON. A negative delta
+        # (neighbor activated before source) must never be treated as movement evidence.
         def _activation_matches_window(neighbor_activated: float) -> bool:
+            if neighbor_activated <= source_on_time:
+                return False
             if neighbor_activated >= (timestamp - self.RECENT_ACTIVATION_WINDOW):
                 return True
             if (neighbor_activated - source_on_time) <= self.MASKED_MOVEMENT_WINDOW:
