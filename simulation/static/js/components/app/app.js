@@ -141,6 +141,8 @@ export class OccupancySimApp extends LitElement {
                         <option value="">Select Scenario...</option>
                         <option value="scenario1">Scenario 1: Bedroom Loop</option>
                         <option value="scenario2">Scenario 2: Bathroom Stay</option>
+                        <option value="scenario3">Scenario 3: Convergence (P1→Living)</option>
+                        <option value="scenario4">Scenario 4: Convergence (P2→Living)</option>
                     </select>
                     <button class="ghost-button" 
                             ?disabled=${this.historyCount === 0 || !this.canSend}

@@ -84,9 +84,10 @@ Motion clearing is the primary trigger for **movement** between areas:
 
 1. **Activation Window**: The resolver checks adjacent areas for activations that happened *after* the source area turned ON but *before* or at the same time as it turned OFF.
    - **Valid Move**: If a neighbor activated in this window, the person is assumed to have moved.
-     - Source area: Occupancy cleared (set to 0).
-     - Target area: Occupancy recorded (if not already occupied).
-   - **Multi-Hop**: If the person moved through multiple active areas, the system traverses the "active path" to find all reachable targets.
+     - Source area: Occupancy decremented by 1 (`record_exit`).
+     - Target area: Occupancy incremented (if not already occupied, or if pre-occupied before the movement chain started — convergence).
+   - **Multi-Hop**: If the person moved through multiple active areas, BFS traversal finds all reachable targets with temporal ordering enforced.
+   - **Multi-Sensor Guard**: If other motion sensors in the same area are still ON, movement detection is skipped entirely — the area is still actively sensing.
    
 2. **Stay Logic**: If no adjacent activation is found within the window:
    - **Person STAYS**: The source area remains occupied.
@@ -114,6 +115,16 @@ If an area is marked `exit_capable` (e.g., Garage, Front Door, Backyard):
 - **Immediate Clear**: Occupancy resets to 0 as soon as motion stops (Motion-OFF), provided no movement to an adjacent area was detected during the activation window.
 - **5-Minute Fallback**: If a Motion-OFF event is missed, the area auto-clears after 5 minutes of inactivity.
 - Creates a warning for tracking purposes if auto-cleared via timeout.
+
+#### Phantom Occupancy Cleanup
+Evidence-based cleanup runs periodically via `AnomalyDetector._check_phantom_occupancy`. Occupancy is cleared **only** when ALL conditions converge:
+1. **Inactivity > 30 min** (cheap short-circuit)
+2. **Probability < 20%** (~170 min of no motion — the binding constraint)
+3. **All neighbors quiet** for 30+ min (protects sleeping people)
+4. **No recent magnetic events** (door/window) for 30+ min
+5. **Area is not exit-capable** (those have their own mechanism)
+
+This is intentionally conservative — a sleeping person is safe because household members moving through adjacent rooms reset the neighbor-activity check.
 
 #### Stale State Reset
 For all areas:
@@ -206,18 +217,25 @@ The `HistoryVerifier` ensures the system is deterministic by comparing recorded 
 
 **Logging Format**: `📍 binary_sensor.kitchen_motion → ON | kitchen[0→1, p=1.00]` or `📍 binary_sensor.kitchen_motion → OFF | kitchen[1→0, p=0.90] | hallway[0→1, p=1.00]`
 
-**Key Simplification**: Direct state management by Coordinator eliminates intermediate manager layers. Periodic consistency checks are disabled in favor of a pure event-driven activation-window model.
+**Key Simplification**: Direct state management by Coordinator eliminates intermediate manager layers. All movement logic is event-driven via the activation-window model in `_handle_motion_off`. Stale/phantom occupancy is handled by the anomaly detector's periodic evidence-based cleanup.
+
+**Activation Windows**: Movement is detected when an adjacent area's sensor activated *after* the source turned ON. Two windows are checked:
+- **Recent (5s)**: Neighbor activated within 5 seconds of the source turning OFF.
+- **Masked movement (30s)**: Neighbor activated within 30 seconds of the source turning ON (catches slow walkers).
+
+**Multi-hop traversal**: When multiple areas are active along a path, BFS expansion finds all reachable targets. Temporal ordering is enforced — each hop must have activated after the previous hop to prevent marking unreachable rooms.
 
 ### 3.2 Timeout Processing Flow
 
 Periodically (triggered by various events or external scheduler):
 
-1. **Trigger**: `Coordinator.check_timeouts` called
+1. **Trigger**: `Coordinator.check_timeouts` called (periodic or explicit)
 2. **Decay**: Probability scores recalculated for all areas
 3. **Exit Check**: Exit-capable areas checked for 5-minute timeout
 4. **Stale Check**: All areas checked for 12h/24h timeouts
-5. **Record**: Snapshot may be recorded for audit trail
-6. **Notify**: `async_set_updated_data` updates all entities
+5. **Phantom Check**: Evidence-based cleanup for areas meeting all 5 conditions (inactivity, probability, neighbor quiet, no magnetic, not exit-capable)
+6. **Record**: Snapshot may be recorded for audit trail
+7. **Notify**: `async_set_updated_data` updates all entities
 
 ## 4. Configuration Schema
 
@@ -309,19 +327,19 @@ sensors:
 - Resolver handles race conditions via state snapshot
 
 ### 7.4 Stuck Sensors
-- Detected when sensor stays active for extended period (default 300s)
-- Marked as unreliable
+- Detected when sensor stays ON for 24 hours (86400s)
+- Marked as unreliable (`is_reliable = False`)
 - Warning generated for user attention
 - System continues to function
+- Sensor reliability is automatically restored when the sensor transitions state again
 
 ### 7.5 Impossible Appearances
 - Motion in non-adjacent area without prior presence
-- System allows occupancy (lights turn on) but flags warning
 - Exit-capable areas exempt from this check
-- Warnings include context for easier diagnosis:
-  - `indoor_activation_unlinked`: Indoor area activated with no plausible source and only outdoor neighbors.
-  - `intrusion_outside_adjacent`: Indoor area activated with recent outdoor activity but no indoor source.
-  - `no_adjacent_source`: No adjacent area was occupied or active.
+- Behavior depends on the specific anomaly type:
+  - `indoor_activation_unlinked`: Indoor area with only outdoor neighbors and zero evidence of outdoor activity or magnetic events. **Activation is IGNORED** (occupancy not added) to prevent phantom occupancy from sensor noise.
+  - `intrusion_outside_adjacent`: Indoor area activated with recent outdoor activity but no indoor source. Occupancy IS added, warning flagged.
+  - `no_adjacent_source`: No adjacent area was occupied or active. Occupancy IS added, warning flagged.
 - Example: `"Unexpected motion in bedroom (no adjacent source)"`
 
 ## 8. Testing Strategy
@@ -362,6 +380,7 @@ sensors:
 | `helpers/anomaly_detector.py` | Health monitoring, warning generation |
 | `helpers/map_state_recorder.py` | Snapshot recording and history |
 | `helpers/history_verifier.py` | History verification, determinism checking |
+| `helpers/constants.py` | Shared constants (sensor types, `normalize_area_ids`) |
 | `helpers/area_state.py` | Individual area state model |
 | `helpers/sensor_state.py` | Individual sensor state model |
 | `helpers/warning.py` | Warning/anomaly data model |

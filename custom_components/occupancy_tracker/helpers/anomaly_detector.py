@@ -1,7 +1,8 @@
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from .area_state import AreaState
+from .constants import MAGNETIC_SENSOR_TYPES, MOTION_SENSOR_TYPES, normalize_area_ids
 from .sensor_state import SensorState
 from .warning import Warning
 from .types import OccupancyTrackerConfig
@@ -20,6 +21,12 @@ class AnomalyDetector:
         self.motion_timeout = 24 * 3600  # 24 hours
         self.extended_occupancy_threshold = 12 * 3600  # 12 hours
         self.adjacency_map = self._build_adjacency(config)
+
+        # Phantom occupancy cleanup thresholds
+        self.phantom_inactivity_threshold = 1800  # 30 minutes
+        self.phantom_probability_threshold = 0.20
+        self.phantom_neighbor_activity_window = 1800  # 30 minutes
+        self.phantom_magnetic_window = 1800  # 30 minutes
 
     def _build_adjacency(self, config: OccupancyTrackerConfig) -> Dict[str, List[str]]:
         adjacency_config = (
@@ -78,7 +85,13 @@ class AnomalyDetector:
                 )
                 sensor.is_reliable = False
 
-    def check_timeouts(self, areas: Dict[str, AreaState], timestamp: float) -> None:
+    def check_timeouts(
+        self,
+        areas: Dict[str, AreaState],
+        timestamp: float,
+        sensors: Optional[Dict[str, SensorState]] = None,
+        probability_fn: Optional[Callable[[str, float], float]] = None,
+    ) -> None:
         """Check for timeout conditions like inactivity and extended occupancy."""
 
         for area_id, area in areas.items():
@@ -93,7 +106,7 @@ class AnomalyDetector:
                     logger.info(
                         f"Auto-clearing exit-capable area {area_id} after {inactivity_duration:.0f}s of inactivity"
                     )
-                    area.occupancy = 0
+                    area.clear_occupancy(timestamp, target_id="timeout")
                     self._create_warning(
                         "exit_area_auto_clear",
                         f"Exit-capable area {area_id} was auto-cleared after {inactivity_duration / 60:.1f} minutes of inactivity",
@@ -111,7 +124,7 @@ class AnomalyDetector:
                     logger.warning(
                         f"Resetting area {area_id} due to {inactivity_duration / 3600:.1f} hours of inactivity"
                     )
-                    area.occupancy = 0
+                    area.clear_occupancy(timestamp, target_id="timeout")
                     self._create_warning(
                         "inactivity_timeout",
                         f"Area {area_id} was reset after {inactivity_duration / 3600:.1f} hours of inactivity",
@@ -135,6 +148,103 @@ class AnomalyDetector:
                             area=area_id,
                             timestamp=timestamp,
                         )
+
+        if sensors is not None and probability_fn is not None:
+            self._check_phantom_occupancy(areas, timestamp, sensors, probability_fn)
+
+    def _check_phantom_occupancy(
+        self,
+        areas: Dict[str, AreaState],
+        timestamp: float,
+        sensors: Dict[str, SensorState],
+        probability_fn: Callable[[str, float], float],
+    ) -> None:
+        """Clear occupancy when all evidence suggests a phantom occupant.
+
+        Only clears when ALL conditions are true:
+        1. Inactivity exceeds threshold (30 min)
+        2. Probability has decayed below threshold (~170 min)
+        3. All neighboring areas are quiet (protects sleeping people)
+        4. No recent magnetic events (door/window)
+        5. Area is not exit-capable
+        """
+        for area_id, area in areas.items():
+            if area.occupancy <= 0:
+                continue
+
+            if area.is_exit_capable:
+                continue
+
+            inactivity = area.get_inactivity_duration(timestamp)
+            if inactivity < self.phantom_inactivity_threshold:
+                continue
+
+            probability = probability_fn(area_id, timestamp)
+            if probability >= self.phantom_probability_threshold:
+                continue
+
+            # Check ALL neighbors for recent activity
+            any_neighbor_active = False
+            for neighbor_id in self.adjacency_map.get(area_id, []):
+                neighbor = areas.get(neighbor_id)
+                if neighbor and neighbor.has_recent_motion(
+                    timestamp, self.phantom_neighbor_activity_window
+                ):
+                    any_neighbor_active = True
+                    break
+
+                # Also check if any motion sensor in the neighbor is currently ON
+                for sensor in sensors.values():
+                    if not sensor.current_state:
+                        continue
+                    sensor_type = sensor.config.get("type", "")
+                    if sensor_type not in MOTION_SENSOR_TYPES:
+                        continue
+                    sensor_areas = normalize_area_ids(sensor.config.get("area"))
+                    if neighbor_id in sensor_areas:
+                        any_neighbor_active = True
+                        break
+                if any_neighbor_active:
+                    break
+
+            if any_neighbor_active:
+                continue
+
+            # Check for recent magnetic events on this area
+            recent_magnetic = False
+            for sensor in sensors.values():
+                sensor_type = sensor.config.get("type", "")
+                if sensor_type not in MAGNETIC_SENSOR_TYPES:
+                    continue
+                sensor_areas = normalize_area_ids(sensor.config.get("area"))
+                if area_id not in sensor_areas:
+                    continue
+                if (
+                    sensor.last_changed
+                    and (timestamp - sensor.last_changed)
+                    <= self.phantom_magnetic_window
+                ):
+                    recent_magnetic = True
+                    break
+
+            if recent_magnetic:
+                continue
+
+            # All conditions met — clear phantom occupancy
+            logger.info(
+                f"Clearing phantom occupancy in {area_id}: "
+                f"inactive {inactivity / 60:.0f}min, probability {probability:.2f}, "
+                f"no neighbor activity, no recent magnetic events"
+            )
+            area.clear_occupancy(timestamp)
+            self._create_warning(
+                "phantom_occupancy_cleared",
+                f"Phantom occupancy cleared in {area_id} after "
+                f"{inactivity / 60:.0f} minutes of inactivity "
+                f"(probability: {probability:.0%})",
+                area=area_id,
+                timestamp=timestamp,
+            )
 
     def _create_warning(
         self,

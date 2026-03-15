@@ -1,26 +1,17 @@
 from __future__ import annotations
 
 import logging
-from enum import Enum, auto
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from .anomaly_detector import AnomalyDetector
 from .area_state import AreaState
+from .constants import MAGNETIC_SENSOR_TYPES, MOTION_SENSOR_TYPES, normalize_area_ids
 from .map_state_recorder import MapSnapshot
 from .sensor_state import SensorState
 from .types import OccupancyTrackerConfig
 
 
 _LOGGER = logging.getLogger("resolver")
-
-
-class TransitionOutcome(Enum):
-    """Represents how a motion event should affect occupancy."""
-
-    ALREADY_PRESENT = auto()
-    MOVED_FROM_NEIGHBOR = auto()
-    ENTERED_FROM_OUTSIDE = auto()
-    INVALID = auto()
 
 
 class MapOccupancyResolver:
@@ -38,39 +29,18 @@ class MapOccupancyResolver:
     - When motion stops, person is probably still there (they just stopped moving)
     """
 
-    MOTION_SENSOR_TYPES = {"motion", "camera_motion", "camera_person"}
     ADJACENT_ACTIVITY_WINDOW = 60  # seconds
-    PASS_THROUGH_WINDOW = 1.5  # seconds - quick pass-through detection
-    DEACTIVATION_LOOKBACK = 3
 
     # Motion-off thresholds
     RECENT_ACTIVATION_WINDOW = 5.0  # seconds - for explicit movement detection
-    ANTI_BOUNCE_WINDOW = 10.0  # seconds - prevent ping-pong between areas
     MASKED_MOVEMENT_WINDOW = 30.0  # seconds - for masked movement detection
     OUTDOOR_INTRUSION_WINDOW = 300.0  # seconds - outdoor-to-indoor allowance window
 
-    # Source detection thresholds
-    # "Stationary" here means: sensor has been continuously ON for a short while.
-    # This is used as a *weak* signal to avoid stealing from rooms that are clearly
-    # being occupied continuously (e.g. hallway sensor stuck ON while someone else passes).
-    STATIONARY_THRESHOLD = 5.0  # seconds
-
-    # Anchor protection:
-    # Areas that are occupied and have had continuous motion for a while are treated as "anchors".
-    # We avoid taking the last occupant from these areas unless there is no other plausible source.
-    ANCHOR_ACTIVE_THRESHOLD = 60.0  # seconds
-    MAX_SOURCE_SEARCH_HOPS = 6
-
-    # Consistency resolution
-    MAX_CONSISTENCY_ITERATIONS = 5  # prevent infinite loops
-
     def __init__(self, config: OccupancyTrackerConfig) -> None:
         self.adjacency_map = self._build_adjacency(config)
-        self._recent_deactivations: Dict[str, List[float]] = {}
-        self._area_configs: Dict[str, dict] = config.get("areas", {})
 
     def reset(self) -> None:
-        self._recent_deactivations.clear()
+        pass
 
     @staticmethod
     def _build_adjacency(config: OccupancyTrackerConfig) -> Dict[str, List[str]]:
@@ -120,11 +90,12 @@ class MapOccupancyResolver:
         sensor_type = sensor.config.get("type", "")
         timestamp = snapshot.timestamp
 
-        # Update sensor state to match snapshot
-        sensor.update_state(new_state, timestamp)
+        # NOTE: Sensor state is updated by the caller (Coordinator / SensorEventHelper)
+        # before calling process_snapshot. The resolver only reads sensor state, it does
+        # not own sensor state updates.
 
         move_target = None
-        if sensor_type in self.MOTION_SENSOR_TYPES:
+        if sensor_type in MOTION_SENSOR_TYPES:
             if new_state:
                 move_target = self._handle_motion_on(
                     sensor,
@@ -136,15 +107,10 @@ class MapOccupancyResolver:
             else:
                 move_target = self._handle_motion_off(sensor, timestamp, areas, sensors)
 
-        elif sensor_type in ("door", "garage_door", "window", "magnetic"):
+        elif sensor_type in MAGNETIC_SENSOR_TYPES:
             move_target = self._handle_magnetic_event(
                 sensor, new_state, timestamp, areas
             )
-
-        # Run consistency resolution after the primary event
-        # This handles "Bucket Brigade" moves where one person moving
-        # leaves a room empty that is still active.
-        self.resolve_consistency(areas, sensors, timestamp)
 
         return move_target
 
@@ -166,6 +132,13 @@ class MapOccupancyResolver:
             area.activity_history = []
 
         for snapshot in history:
+            # Update sensor state before processing (mirrors coordinator behavior)
+            event = self._parse_sensor_event(snapshot)
+            if event:
+                sensor_id, new_state = event
+                sensor = sensors.get(sensor_id)
+                if sensor:
+                    sensor.update_state(new_state, snapshot.timestamp)
             self.process_snapshot(snapshot, areas, sensors, anomaly_detector)
 
     def _handle_magnetic_event(
@@ -188,7 +161,7 @@ class MapOccupancyResolver:
 
         # Find areas linked to this sensor
         # Some sensors link to 2 areas (like doors between rooms)
-        sensor_areas = self._normalize_area_ids(sensor.config.get("area"))
+        sensor_areas = normalize_area_ids(sensor.config.get("area"))
 
         # Also check "between_areas" in config if present (legacy support)
         # But usually we map sensors to areas directly.
@@ -298,9 +271,9 @@ class MapOccupancyResolver:
         recent_magnetic = False
         for sensor_state in sensors.values():
             sensor_type = sensor_state.config.get("type", "")
-            if sensor_type not in ("door", "garage_door", "window", "magnetic"):
+            if sensor_type not in MAGNETIC_SENSOR_TYPES:
                 continue
-            sensor_areas = self._normalize_area_ids(sensor_state.config.get("area"))
+            sensor_areas = normalize_area_ids(sensor_state.config.get("area"))
             if area_id not in sensor_areas:
                 continue
             if sensor_state.last_changed and sensor_state.last_changed >= (
@@ -348,18 +321,6 @@ class MapOccupancyResolver:
         area.record_entry(timestamp)
         return area_id
 
-    def resolve_consistency(
-        self,
-        areas: Dict[str, AreaState],
-        sensors: Dict[str, SensorState],
-        timestamp: float,
-    ) -> bool:
-        """
-        Consistency resolution disabled in activation-window model.
-        Movement is determined solely by activation-window checks in _handle_motion_off.
-        """
-        return False
-
     def _handle_motion_off(
         self,
         sensor: SensorState,
@@ -377,14 +338,12 @@ class MapOccupancyResolver:
         - Inclusive end: activations very close to OFF count as movement evidence
 
         If no valid neighbor activation:
-        - Person STAYED in source area
-        - Source remains occupied
+        - Person STAYED in source area (source remains occupied)
+        - Exit-capable areas clear immediately (person left the system)
 
         If valid neighbor(s) found:
-        - Mark valid neighbors as occupied (ambiguous state)
-        - Recursively expand to further areas via active paths (multi-hop)
-        - If source is transition area, clear it immediately
-        - If source is stay-area, keep it occupied too (both now occupied)
+        - Mark valid neighbors as occupied via BFS through active paths
+        - Decrement source by 1 (record_exit)
         """
         area_id = sensor.config.get("area")
         if not area_id:
@@ -393,6 +352,24 @@ class MapOccupancyResolver:
         area = areas.get(area_id)
         if not area or area.occupancy <= 0:
             return None
+
+        # If other motion sensors in this area are still ON, skip movement detection.
+        # The area is still actively detecting motion — don't try to move the person.
+        for other_sensor in sensors.values():
+            if other_sensor.id == sensor.id:
+                continue
+            if not other_sensor.current_state:
+                continue
+            other_type = other_sensor.config.get("type", "")
+            if other_type not in MOTION_SENSOR_TYPES:
+                continue
+            other_areas = normalize_area_ids(other_sensor.config.get("area"))
+            if area_id in other_areas:
+                _LOGGER.debug(
+                    f"Motion-OFF in {area_id}: other sensor {other_sensor.id} still active, skipping"
+                )
+                area.last_motion = timestamp
+                return None
 
         # Update last_motion on deactivation too
         area.last_motion = timestamp
@@ -505,6 +482,10 @@ class MapOccupancyResolver:
                 ):
                     continue
 
+                # Temporal ordering: next hop must have activated after current hop
+                if next_activated < current_time:
+                    continue
+
                 # Valid multi-hop target
                 visited.add(next_id)
                 to_mark.add(next_id)
@@ -523,6 +504,28 @@ class MapOccupancyResolver:
                         f"Motion-OFF {area_id} → {target_id}: marking occupied (multi-hop)"
                     )
                     target.record_entry(timestamp)
+                else:
+                    # Target already occupied — check if it was pre-occupied before
+                    # this movement chain started. If so, a NEW person is arriving
+                    # (motion-ON didn't increment because area was already occupied).
+                    target_was_preoccupied = False
+                    found_entry = False
+                    for ts, evt in reversed(target.activity_history):
+                        if evt == "entry":
+                            target_was_preoccupied = ts < source_on_time
+                            found_entry = True
+                            break
+                    # If history was truncated and no entry found, assume
+                    # pre-occupied (occupancy > 0 with no visible entry means
+                    # the entry was evicted from the bounded history).
+                    if not found_entry and target.occupancy > 0:
+                        target_was_preoccupied = True
+                    if target_was_preoccupied:
+                        _LOGGER.debug(
+                            f"Motion-OFF {area_id} → {target_id}: incrementing "
+                            f"(pre-occupied, new person arriving)"
+                        )
+                        target.record_entry(timestamp)
                 if primary_target is None:
                     primary_target = target_id
 
@@ -532,10 +535,10 @@ class MapOccupancyResolver:
             )
             # Record all targets in last_exit_to to ensure activity is consumed for all of them
             targets = list(to_mark)
-            if area.is_exit_capable:
-                area.clear_occupancy(timestamp, target_id=targets)
-            else:
-                area.record_exit(timestamp, target_id=targets)
+            # Use record_exit (decrement by 1) for movement to neighbor, even for
+            # exit-capable areas. clear_occupancy (zero out) is only for when
+            # the person leaves the system entirely (no valid neighbor found).
+            area.record_exit(timestamp, target_id=targets)
 
         # Return the first target for logging
         return primary_target
@@ -549,31 +552,13 @@ class MapOccupancyResolver:
             # Only consider motion/camera sensors for activity/refill logic
             # Magnetic sensors (doors) can be left open without presence
             sensor_type = sensor.config.get("type", "")
-            if sensor_type not in self.MOTION_SENSOR_TYPES:
+            if sensor_type not in MOTION_SENSOR_TYPES:
                 continue
 
-            sensor_areas = self._normalize_area_ids(sensor.config.get("area"))
+            sensor_areas = normalize_area_ids(sensor.config.get("area"))
             if area_id in sensor_areas:
                 return True
         return False
-
-    def _area_active_since(
-        self, area_id: str, sensors: Dict[str, SensorState]
-    ) -> Optional[float]:
-        """Return the earliest 'ON since' timestamp for currently-ON sensors in area_id."""
-        earliest: Optional[float] = None
-        for sensor in sensors.values():
-            if not sensor.current_state:
-                continue
-            sensor_type = sensor.config.get("type", "")
-            if sensor_type not in self.MOTION_SENSOR_TYPES:
-                continue
-            sensor_areas = self._normalize_area_ids(sensor.config.get("area"))
-            if area_id not in sensor_areas:
-                continue
-            if earliest is None or sensor.last_changed < earliest:
-                earliest = sensor.last_changed
-        return earliest
 
     def _get_area_activated_at(
         self, area_id: str, sensors: Dict[str, SensorState]
@@ -590,9 +575,9 @@ class MapOccupancyResolver:
                 continue
 
             sensor_type = sensor.config.get("type", "")
-            if sensor_type not in self.MOTION_SENSOR_TYPES:
+            if sensor_type not in MOTION_SENSOR_TYPES:
                 continue
-            sensor_areas = self._normalize_area_ids(sensor.config.get("area"))
+            sensor_areas = normalize_area_ids(sensor.config.get("area"))
             if area_id not in sensor_areas:
                 continue
             # Use activated_at (OFF→ON timestamp), not last_changed
@@ -600,29 +585,3 @@ class MapOccupancyResolver:
                 if most_recent is None or sensor.activated_at > most_recent:
                     most_recent = sensor.activated_at
         return most_recent
-
-    def _area_active_duration(
-        self, area_id: str, sensors: Dict[str, SensorState], timestamp: float
-    ) -> float:
-        """Return continuous active duration (seconds) for an area at timestamp."""
-        since = self._area_active_since(area_id, sensors)
-        if since is None:
-            return 0.0
-        return max(0.0, timestamp - since)
-
-    @staticmethod
-    def _normalize_area_ids(raw_value: Optional[Any]) -> List[str]:
-        if isinstance(raw_value, str):
-            return [raw_value]
-        if isinstance(raw_value, list):
-            return [entry for entry in raw_value if isinstance(entry, str)]
-        return []
-
-    def validate_state(
-        self,
-        areas: Dict[str, AreaState],
-        sensors: Dict[str, SensorState],
-        timestamp: float,
-    ) -> List[Dict[str, Any]]:
-        """Validate current state (disabled in lean architecture)."""
-        return []

@@ -234,7 +234,12 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         """Check for timeout conditions."""
         if timestamp is None:
             timestamp = time.time()
-        self.anomaly_detector.check_timeouts(self.areas, timestamp)
+        self.anomaly_detector.check_timeouts(
+            self.areas,
+            timestamp,
+            sensors=self.sensors,
+            probability_fn=self.get_occupancy_probability,
+        )
         self.state_recorder.maybe_record_tick(
             timestamp,
             self.areas,
@@ -385,29 +390,20 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         return self.diagnostics.diagnose_motion_issues(sensor_id)
 
     async def _async_update_data(self) -> Dict[str, Any]:
-        """
-        Periodic update - runs every PERIODIC_UPDATE_INTERVAL.
-
-        This handles:
-        1. Consistency resolution (active-but-empty areas)
-        2. Timeout-based anomaly detection
-        3. State refresh for sensors
-        """
+        """Periodic update — timeout checks and phantom cleanup."""
         timestamp = time.time()
 
-        # Capture state before processing
         old_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
 
-        # Run periodic consistency resolution
-        # This catches cases where sensors are on but no occupant is assigned
-        changes_made = self._run_periodic_consistency(timestamp)
+        self.anomaly_detector.check_timeouts(
+            self.areas,
+            timestamp,
+            sensors=self.sensors,
+            probability_fn=self.get_occupancy_probability,
+        )
 
-        # Check for timeout-based anomalies (stuck sensors, extended occupancy)
-        self.anomaly_detector.check_timeouts(self.areas, timestamp)
-
-        # Log if occupancy changed
-        if changes_made:
-            new_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
+        new_occupancy = {aid: area.occupancy for aid, area in self.areas.items()}
+        if old_occupancy != new_occupancy:
             state_view = self.log_formatter.format_state_view(self.areas, self.sensors)
             changes = self.log_formatter.format_occupancy_changes(
                 old_occupancy, new_occupancy
@@ -416,15 +412,3 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                 _LOGGER.info(f"⏱️ periodic | {changes} | {state_view}")
 
         return self.diagnostics.get_system_status()
-
-    def _run_periodic_consistency(self, timestamp: float) -> bool:
-        """
-        Run consistency checks during periodic updates.
-
-        This is different from event-driven consistency:
-        - We CAN pull from stationary areas (if they've been active long enough)
-        - We look for active-but-empty areas that need filling
-
-        Returns True if any changes were made.
-        """
-        return False  # Periodic consistency disabled in lean architecture

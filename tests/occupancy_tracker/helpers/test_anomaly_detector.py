@@ -306,3 +306,343 @@ class TestAnomalyDetector:
             "unexpected_motion",
             "inactivity_timeout",
         }
+
+
+class TestPhantomOccupancyCleanup:
+    """Tests for evidence-based phantom occupancy cleanup."""
+
+    BASE_TIME = 1_000_000.0
+
+    def _make_config(self):
+        return {
+            "areas": {
+                "bedroom": {"name": "Bedroom"},
+                "hallway": {"name": "Hallway"},
+                "kitchen": {"name": "Kitchen"},
+                "frontyard": {
+                    "name": "Frontyard",
+                    "indoors": False,
+                    "exit_capable": True,
+                },
+            },
+            "adjacency": {
+                "bedroom": ["hallway"],
+                "hallway": ["kitchen", "frontyard"],
+            },
+            "sensors": {},
+        }
+
+    def _make_areas(self, config):
+        return {aid: AreaState(aid, acfg) for aid, acfg in config["areas"].items()}
+
+    def _make_sensors(self, timestamp):
+        return {
+            "sensor.bedroom_motion": SensorState(
+                "sensor.bedroom_motion",
+                {"area": "bedroom", "type": "motion"},
+                timestamp,
+            ),
+            "sensor.hallway_motion": SensorState(
+                "sensor.hallway_motion",
+                {"area": "hallway", "type": "motion"},
+                timestamp,
+            ),
+            "sensor.kitchen_motion": SensorState(
+                "sensor.kitchen_motion",
+                {"area": "kitchen", "type": "motion"},
+                timestamp,
+            ),
+            "sensor.front_door": SensorState(
+                "sensor.front_door",
+                {"area": ["hallway", "frontyard"], "type": "door"},
+                timestamp,
+            ),
+        }
+
+    def _low_probability(self, area_id, timestamp):
+        """Simulate decayed probability."""
+        return 0.12
+
+    def _high_probability(self, area_id, timestamp):
+        """Simulate fresh probability."""
+        return 0.60
+
+    def test_phantom_cleared_all_conditions_met(self):
+        """When all conditions met, phantom occupancy is cleared."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        # Bedroom occupied with very old motion
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000  # 200 min ago
+
+        # All neighbors quiet
+        areas["hallway"].last_motion = self.BASE_TIME - 3600  # 60 min ago
+
+        now = self.BASE_TIME
+
+        detector.check_timeouts(
+            areas, now, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["bedroom"].occupancy == 0
+        warnings = [
+            w for w in detector.get_warnings() if w.type == "phantom_occupancy_cleared"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].area == "bedroom"
+
+    def test_not_cleared_inactivity_too_short(self):
+        """Phantom cleanup skipped when inactivity is under threshold."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 900  # 15 min ago
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["bedroom"].occupancy == 1
+
+    def test_not_cleared_probability_too_high(self):
+        """Phantom cleanup skipped when probability is still high."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+
+        areas["hallway"].last_motion = self.BASE_TIME - 3600
+
+        detector.check_timeouts(
+            areas,
+            self.BASE_TIME,
+            sensors=sensors,
+            probability_fn=self._high_probability,
+        )
+
+        assert areas["bedroom"].occupancy == 1
+
+    def test_not_cleared_neighbor_recent_motion(self):
+        """Phantom cleanup skipped when neighbor had recent motion (sleeping person)."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+
+        # Someone walked through hallway 2 min ago
+        areas["hallway"].last_motion = self.BASE_TIME - 120
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["bedroom"].occupancy == 1
+
+    def test_not_cleared_neighbor_sensor_on(self):
+        """Phantom cleanup skipped when neighbor has active motion sensor."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+        areas["hallway"].last_motion = self.BASE_TIME - 3600
+
+        # Hallway motion sensor currently ON
+        sensors["sensor.hallway_motion"].update_state(True, self.BASE_TIME - 10)
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["bedroom"].occupancy == 1
+
+    def test_not_cleared_recent_magnetic_event(self):
+        """Phantom cleanup skipped when a door sensor on the area changed recently."""
+        config = {
+            "areas": {
+                "hallway": {"name": "Hallway"},
+                "kitchen": {"name": "Kitchen"},
+            },
+            "adjacency": {"hallway": ["kitchen"]},
+            "sensors": {},
+        }
+        detector = AnomalyDetector(config)
+        areas = {aid: AreaState(aid, acfg) for aid, acfg in config["areas"].items()}
+        sensors = {
+            "sensor.hallway_motion": SensorState(
+                "sensor.hallway_motion",
+                {"area": "hallway", "type": "motion"},
+                self.BASE_TIME,
+            ),
+            "sensor.kitchen_motion": SensorState(
+                "sensor.kitchen_motion",
+                {"area": "kitchen", "type": "motion"},
+                self.BASE_TIME,
+            ),
+            "sensor.hallway_door": SensorState(
+                "sensor.hallway_door",
+                {"area": "hallway", "type": "door"},
+                self.BASE_TIME,
+            ),
+        }
+
+        areas["hallway"].occupancy = 1
+        areas["hallway"].last_motion = self.BASE_TIME - 12000
+        areas["kitchen"].last_motion = self.BASE_TIME - 3600
+
+        # Door opened 10 min ago
+        sensors["sensor.hallway_door"].update_state(True, self.BASE_TIME - 600)
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["hallway"].occupancy == 1
+
+    def test_not_cleared_exit_capable(self):
+        """Exit-capable areas are not phantom-cleared (they have their own mechanism)."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["frontyard"].occupancy = 1
+        areas["frontyard"].last_motion = self.BASE_TIME - 12000
+
+        # Note: exit-capable auto-clear at 5 min will fire first,
+        # but phantom check should also skip it independently
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        # Frontyard cleared by exit-capable mechanism, not phantom
+        phantom_warnings = [
+            w for w in detector.get_warnings() if w.type == "phantom_occupancy_cleared"
+        ]
+        assert len(phantom_warnings) == 0
+
+    def test_multiple_areas_only_phantom_cleared(self):
+        """Only the phantom area is cleared; legitimately occupied areas are kept."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        # Kitchen: legitimately occupied (recent motion)
+        areas["kitchen"].occupancy = 1
+        areas["kitchen"].last_motion = self.BASE_TIME - 60
+
+        # Bedroom: phantom (all conditions met)
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+
+        # Hallway quiet
+        areas["hallway"].last_motion = self.BASE_TIME - 3600
+
+        def probability(area_id, timestamp):
+            if area_id == "bedroom":
+                return 0.12
+            return 1.0  # Kitchen is fresh
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=probability
+        )
+
+        assert areas["kitchen"].occupancy == 1  # Kept
+        assert areas["bedroom"].occupancy == 0  # Cleared
+
+    def test_backward_compat_no_sensors(self):
+        """check_timeouts works without sensors/probability_fn (existing behavior)."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+
+        # Call without new params — should not crash, no phantom cleanup
+        detector.check_timeouts(areas, self.BASE_TIME)
+
+        # 24h check won't fire (only 200 min), so bedroom stays
+        assert areas["bedroom"].occupancy == 1
+
+    def test_warning_metadata(self):
+        """Warning created by phantom cleanup has correct metadata."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 1
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+        areas["hallway"].last_motion = self.BASE_TIME - 3600
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        warnings = [
+            w for w in detector.get_warnings() if w.type == "phantom_occupancy_cleared"
+        ]
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w.area == "bedroom"
+        assert "200" in w.message  # ~200 min of inactivity
+        assert "12%" in w.message  # probability
+
+    def test_isolated_area_cleared(self):
+        """Area with no neighbors is cleared when other conditions met (vacuously true)."""
+        config = {
+            "areas": {"isolated": {"name": "Isolated Room"}},
+            "adjacency": {},
+            "sensors": {},
+        }
+        detector = AnomalyDetector(config)
+        areas = {"isolated": AreaState("isolated", config["areas"]["isolated"])}
+        sensors = {
+            "sensor.isolated_motion": SensorState(
+                "sensor.isolated_motion",
+                {"area": "isolated", "type": "motion"},
+                self.BASE_TIME,
+            ),
+        }
+
+        areas["isolated"].occupancy = 1
+        areas["isolated"].last_motion = self.BASE_TIME - 12000
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["isolated"].occupancy == 0
+
+    def test_occupancy_greater_than_one_fully_cleared(self):
+        """clear_occupancy sets occupancy to 0, not decrement by 1."""
+        config = self._make_config()
+        detector = AnomalyDetector(config)
+        areas = self._make_areas(config)
+        sensors = self._make_sensors(self.BASE_TIME)
+
+        areas["bedroom"].occupancy = 3
+        areas["bedroom"].last_motion = self.BASE_TIME - 12000
+        areas["hallway"].last_motion = self.BASE_TIME - 3600
+
+        detector.check_timeouts(
+            areas, self.BASE_TIME, sensors=sensors, probability_fn=self._low_probability
+        )
+
+        assert areas["bedroom"].occupancy == 0

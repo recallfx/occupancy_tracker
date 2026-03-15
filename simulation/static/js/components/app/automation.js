@@ -2,7 +2,9 @@ export async function runAutomation(scenarioId, persons, layout, checkSensors, r
     // Define scenarios
     const scenarios = {
         scenario1: ['frontyard', 'magnetic_entry', 'entrance', 'front_hall', 'back_hall', 'main_bedroom', 'main_bathroom', 'main_bedroom'],
-        scenario2: ['frontyard', 'magnetic_entry', 'entrance', 'front_hall', 'back_hall', 'main_bedroom', 'main_bathroom']
+        scenario2: ['frontyard', 'magnetic_entry', 'entrance', 'front_hall', 'back_hall', 'main_bedroom', 'main_bathroom'],
+        scenario3: ['frontyard', 'magnetic_entry', 'entrance', 'living'],
+        scenario4: ['frontyard', 'magnetic_entry', 'entrance', 'living'],
     };
 
     const path = scenarios[scenarioId];
@@ -16,6 +18,8 @@ export async function runAutomation(scenarioId, persons, layout, checkSensors, r
     // Scenario 2 -> Person 2 (index 1)
     let personIndex = 0;
     if (scenarioId === 'scenario2') personIndex = 1;
+    if (scenarioId === 'scenario3') personIndex = 0;
+    if (scenarioId === 'scenario4') personIndex = 1;
     if (personIndex >= persons.length) personIndex = 0; // fallback
 
     const person = persons[personIndex];

@@ -135,8 +135,9 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         # Update sensor state
         state_changed = sensor.update_state(state, timestamp)
 
-        # Skip processing if state didn't actually change
-        if not state_changed:
+        # Skip repeated OFF events but allow repeated ON events (keep-alive)
+        # to update last_motion and confirm presence (matches HA coordinator behavior)
+        if not state_changed and not state:
             return
 
         # Record snapshot
@@ -168,7 +169,12 @@ class SimOccupancyCoordinator(OccupancyCoordinator):
         """Check for timeout conditions."""
         if timestamp is None:
             timestamp = time.time()
-        self.anomaly_detector.check_timeouts(self.areas, timestamp)
+        self.anomaly_detector.check_timeouts(
+            self.areas,
+            timestamp,
+            sensors=self.sensors,
+            probability_fn=self.get_occupancy_probability,
+        )
         self.state_recorder.maybe_record_tick(
             timestamp,
             self.areas,

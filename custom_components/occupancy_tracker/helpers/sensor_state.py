@@ -30,6 +30,10 @@ class SensorState:
 
         # Check if state actually changed
         if new_state != self.current_state:
+            # If sensor was stuck but is now transitioning, restore reliability
+            if self.is_stuck:
+                self.is_stuck = False
+                self.is_reliable = True
             self.current_state = new_state
             self.last_changed = timestamp
             # Track activation time when transitioning OFF→ON
