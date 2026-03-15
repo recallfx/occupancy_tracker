@@ -10,8 +10,6 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/recallfx/occupancy_tracker/issues",
   "quality_scale": "bronze",
-  "requirements": [
-    "pyyaml==6.0.2"
-  ],
+  "requirements": [],
   "version": "1.0.0"
 }
