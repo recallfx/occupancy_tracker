@@ -36,7 +36,9 @@ class MapOccupancyResolver:
     EXIT_AREA_TIMEOUT = 300.0         # Exit-capable areas auto-clear after 5 min
     OUTDOOR_INTRUSION_WINDOW = 300.0  # Magnetic evidence window
     BOOTSTRAP_WINDOW = 120.0          # After restart, allow any indoor activation for 2 min
-    RETAINED_INACTIVITY_TIMEOUT = 60.0  # Clear retained rooms after 1 min of no motion
+    RETAINED_INACTIVITY_TIMEOUT = 120.0  # Clear retained rooms after 2 min of no motion
+    SENSOR_CYCLING_GUARD = 15.0          # Protect retained areas with recent motion (covers KNX 5s cycle)
+    MIN_RETENTION_COOLDOWN = 10.0        # Minimum seconds before a retained area can be displaced/cleaned
 
     def __init__(self, config: OccupancyTrackerConfig) -> None:
         self.adjacency_map = self._build_adjacency(config)
@@ -353,7 +355,9 @@ class MapOccupancyResolver:
 
         # Identify which occupied leaders came from retained (not from an
         # active sensor). These are candidates for displacement.
-        retained_leaders = occupied_areas & set(self.retained.keys())
+        # Areas with active sensors are sensor-based even if also retained —
+        # the sensor being ON is strong evidence the person is there.
+        retained_leaders = (occupied_areas & set(self.retained.keys())) - sensor_active_areas
 
         # Displacement: if a retained leader can reach a sensor leader via
         # a monotonically-increasing motion chain, the person moved — UNLESS
@@ -372,6 +376,19 @@ class MapOccupancyResolver:
             # the person is clearly still there (e.g., sitting in study
             # while someone else walks through corridor).
             if ret_leader in sensor_active_areas:
+                continue
+
+            # Sensor cycling guard: if area had motion very recently, the
+            # sensor is likely just in its OFF gap (KNX 5s cycle).  Don't
+            # displace — wait for the sensor to come back ON.
+            ret_area = areas[ret_leader]
+            if ret_area.last_motion > 0 and (timestamp - ret_area.last_motion) <= self.SENSOR_CYCLING_GUARD:
+                continue
+
+            # Retention cooldown: don't displace areas that were only
+            # recently retained — give the sensor time to re-detect.
+            retention_start = self.retained.get(ret_leader, 0)
+            if retention_start > 0 and (timestamp - retention_start) < self.MIN_RETENTION_COOLDOWN:
                 continue
 
             max_d = 1 if multi_retained else 6
@@ -905,8 +922,18 @@ class MapOccupancyResolver:
             if house_quiet:
                 continue
 
+            # Retention cooldown: don't clean areas that were only recently
+            # retained — give the sensor time to re-detect the person.
+            if (timestamp - retention_start) < self.MIN_RETENTION_COOLDOWN:
+                continue
+
+            # Sensor cycling guard: if area had motion very recently, the
+            # sensor is likely just in its OFF gap.
+            if area.last_motion > 0 and (timestamp - area.last_motion) <= self.SENSOR_CYCLING_GUARD:
+                continue
+
             # Inactivity cleanup: only clear if BOTH conditions are met:
-            # 1. No motion in this area for RETAINED_INACTIVITY_TIMEOUT (60s)
+            # 1. No motion in this area for RETAINED_INACTIVITY_TIMEOUT (120s)
             # 2. An adjacent area has motion MORE RECENT than this area's
             #    last_motion — evidence the person walked out.
             if (

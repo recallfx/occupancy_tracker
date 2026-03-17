@@ -243,8 +243,9 @@ def _seed_person_in_study(resolver, areas, sensors, detector, now):
 
     assert areas["study"].occupancy == 1
     assert _total_occupancy(areas) == 1
-    # Return time well past any activity window
-    return now + 30.0
+    # Return time well past any activity window AND retention cooldown
+    # (study retained at now+12, cooldown=30s, so need > now+42)
+    return now + 45.0
 
 
 # ==================================================================
@@ -561,13 +562,11 @@ def test_full_production_sequence():
     # corridor_1 ON
     _fire(resolver, sensors, areas, "binary_sensor.corridor_1_motion", True, t3 + 4.5, detector)
     _fire(resolver, sensors, areas, "binary_sensor.entrance_motion", False, t3 + 5.0, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.corridor_1_motion", False, t3 + 9.5, detector)
 
-    # corridor_2 ON
+    # corridor_2 ON, bedroom_1 ON, corridor_1 OFF — in timestamp order
     _fire(resolver, sensors, areas, "binary_sensor.corridor_2_motion", True, t3 + 8.9, detector)
-
-    # bedroom_1 ON
     _fire(resolver, sensors, areas, "binary_sensor.bedroom_1_motion", True, t3 + 9.1, detector)
+    _fire(resolver, sensors, areas, "binary_sensor.corridor_1_motion", False, t3 + 9.5, detector)
 
     # All transit sensors OFF
     _fire(resolver, sensors, areas, "binary_sensor.corridor_2_motion", False, t3 + 14.0, detector)

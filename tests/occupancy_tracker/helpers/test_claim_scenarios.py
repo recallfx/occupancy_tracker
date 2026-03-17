@@ -263,11 +263,11 @@ def test_full_walk_chain():
     assert areas["corridor_1"].occupancy == 1
     assert areas["study"].occupancy == 0
 
-    # Corridor_1 OFF (5s KNX delay)
-    _fire(resolver, sensors, areas, "s.corridor_1", False, t_walk + 5.0)
-
     # Entrance ON (+3.7s from corridor -- realistic adjacent walk)
     _fire(resolver, sensors, areas, "s.entrance", True, t_walk + 3.7)
+
+    # Corridor_1 OFF (5s KNX delay)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, t_walk + 5.0)
     assert areas["entrance"].occupancy == 1
     assert _total_occupancy(areas) == 1
 
@@ -668,9 +668,9 @@ def test_reverse_guard_does_not_block_legitimate_return():
     # After 10s the reverse guard expires, so bedroom_1 can pull from corridor_2
     assert areas["bedroom_1"].occupancy == 1
     # Corridor_2 may still be retained briefly (conservative — better than
-    # dropping a real person). Trigger cleanup after 61s of corridor inactivity.
+    # dropping a real person). Trigger cleanup after inactivity timeout.
     _fire(resolver, sensors, areas, "s.bedroom_1", False, t + 15.0)
-    _fire(resolver, sensors, areas, "s.bedroom_1", True, t + 75.0)  # 65s after corridor_2
+    _fire(resolver, sensors, areas, "s.bedroom_1", True, t + 135.0)  # 127s after corridor_2 last_motion (>120s)
     assert areas["bedroom_1"].occupancy == 1
     assert _total_occupancy(areas) == 1
 
@@ -987,3 +987,86 @@ def test_sleeping_person_wakes_walk_is_immediate():
 
     _fire(resolver, sensors, areas, "s.bathroom", True, t + 8)
     assert areas["bathroom"].occupancy == 1, "Bathroom not immediate!"
+
+
+# ==================================================================
+# 20. CRITICAL: Sensor OFF gap must not cause displacement.
+#     Person in study, sensor in 5s OFF gap, housemate walks corridor.
+#     Study must NOT lose occupancy.
+# ==================================================================
+
+def test_sensor_off_gap_blocks_displacement():
+    """Person in study during 5s sensor OFF gap. Housemate walks corridor.
+    Study must NOT be displaced — the SENSOR_CYCLING_GUARD protects it."""
+    now = time.time()
+    config = _full_house_config()
+    resolver = MapOccupancyResolver(config)
+    areas, sensors = _full_house_areas_and_sensors(config, now)
+
+    # Person A enters study
+    _fire(resolver, sensors, areas, "s.entrance", True, now)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 2)
+    _fire(resolver, sensors, areas, "s.study", True, now + 3)
+    assert areas["study"].occupancy == 1
+
+    # Transit sensors go OFF
+    _fire(resolver, sensors, areas, "s.entrance", False, now + 5)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 7)
+
+    # Study sensor cycles ON/OFF (person sitting)
+    _fire(resolver, sensors, areas, "s.study", False, now + 8)
+    assert areas["study"].occupancy == 1  # Retained
+    _fire(resolver, sensors, areas, "s.study", True, now + 13)
+    _fire(resolver, sensors, areas, "s.study", False, now + 18)
+    assert areas["study"].occupancy == 1  # Still retained
+
+    # NOW: study sensor OFF (at now+18). Last motion = now+13.
+    # Person B walks through corridor_1 at now+20 (7s after study's last motion)
+    # SENSOR_CYCLING_GUARD: (now+20 - now+13) = 7s < 15s → PROTECTED
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 20)
+    assert areas["study"].occupancy == 1, "Study displaced during sensor OFF gap!"
+
+    # Person B continues to bedroom_2
+    _fire(resolver, sensors, areas, "s.bedroom_2", True, now + 22)
+    assert areas["study"].occupancy == 1, "Study displaced by bedroom_2!"
+
+    # Study sensor comes back ON (next KNX cycle)
+    _fire(resolver, sensors, areas, "s.study", True, now + 23)
+    assert areas["study"].occupancy == 1
+
+    # Both people tracked
+    assert areas["bedroom_2"].occupancy == 1
+    assert _total_occupancy(areas) >= 2
+
+
+# ==================================================================
+# 21. Retention cooldown — recently retained room immune to displacement
+# ==================================================================
+
+def test_retention_cooldown_blocks_displacement():
+    """Room retained < 30s ago cannot be displaced even if guards are met."""
+    now = time.time()
+    config = _full_house_config()
+    resolver = MapOccupancyResolver(config)
+    areas, sensors = _full_house_areas_and_sensors(config, now)
+
+    # Person enters study
+    _fire(resolver, sensors, areas, "s.entrance", True, now)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 2)
+    _fire(resolver, sensors, areas, "s.study", True, now + 3)
+
+    # Clear transit
+    _fire(resolver, sensors, areas, "s.entrance", False, now + 5)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 7)
+    _fire(resolver, sensors, areas, "s.study", False, now + 8)
+    # study retained at now+8
+
+    # 5 seconds later (within both SENSOR_CYCLING_GUARD=15s and
+    # MIN_RETENTION_COOLDOWN=10s), someone walks corridor
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 13)
+    assert areas["study"].occupancy == 1, "Study displaced within retention cooldown!"
+
+    # 20 seconds after retention (past cooldown=10s and cycling guard=15s),
+    # corridor fires again. Now study CAN be displaced.
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 30)
+    assert areas["study"].occupancy == 0, "Study should be displaced after cooldown"
