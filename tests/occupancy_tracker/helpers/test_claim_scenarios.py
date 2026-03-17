@@ -1070,3 +1070,97 @@ def test_retention_cooldown_blocks_displacement():
     # corridor fires again. Now study CAN be displaced.
     _fire(resolver, sensors, areas, "s.corridor_1", True, now + 30)
     assert areas["study"].occupancy == 0, "Study should be displaced after cooldown"
+
+
+# ==================================================================
+# 22. CRITICAL: Person sitting very still — sensor stops cycling.
+#     After SENSOR_CYCLING_GUARD (15s) expires, housemate walks by.
+#     Room must NOT lose occupancy because RETAINED_INACTIVITY_TIMEOUT
+#     (120s) hasn't elapsed yet — and there's no leaving evidence
+#     unless someone walks through a DIRECT neighbor.
+# ==================================================================
+
+def test_still_person_sensor_stops_housemate_enters():
+    """Person reads in study (sensor stopped). Housemate enters from outside
+    via frontyard → entrance → corridor_1 → bedroom_1. Study must stay
+    occupied because independent entry evidence (frontyard) proves the
+    corridor motion is a different person."""
+    now = time.time()
+    config = _full_house_config()
+    resolver = MapOccupancyResolver(config)
+    areas, sensors = _full_house_areas_and_sensors(config, now)
+
+    # Person A enters study
+    _fire(resolver, sensors, areas, "s.entrance", True, now)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 2)
+    _fire(resolver, sensors, areas, "s.study", True, now + 3)
+
+    # Transit sensors go OFF
+    _fire(resolver, sensors, areas, "s.entrance", False, now + 5)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 7)
+
+    # Study sensor cycles then stops (person settling in to read)
+    _fire(resolver, sensors, areas, "s.study", False, now + 8)
+    _fire(resolver, sensors, areas, "s.study", True, now + 13)
+    _fire(resolver, sensors, areas, "s.study", False, now + 18)
+    # Last motion at now+13. Person sits very still.
+
+    # 30s later — all guards expired. Person B enters from OUTSIDE.
+    # frontyard (exit-capable) fires first, proving independent entry.
+    _fire(resolver, sensors, areas, "s.frontyard", True, now + 43)
+    _fire(resolver, sensors, areas, "s.entrance", True, now + 45)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 47)
+
+    # Study must be protected: frontyard.last_motion (now+43) > study's
+    # last_motion (now+13), proving someone entered from outside.
+    assert areas["study"].occupancy == 1, (
+        "Study displaced even though housemate entered from outside!"
+    )
+
+    # Person B continues to bedroom_1
+    _fire(resolver, sensors, areas, "s.corridor_2", True, now + 49)
+    _fire(resolver, sensors, areas, "s.bedroom_1", True, now + 51)
+    assert areas["study"].occupancy == 1, "Study displaced by bedroom walk!"
+    assert areas["bedroom_1"].occupancy == 1
+
+
+# ==================================================================
+# 23. Single-person vulnerability: sensor stops, corridor fires
+#     with no exit-capable evidence. System displaces study (expected).
+#     Room must recover immediately when sensor re-fires.
+# ==================================================================
+
+def test_still_person_recovers_on_sensor_refire():
+    """If displacement happens after guards expire (single-person,
+    no entry evidence), the room recovers immediately when the
+    sensor re-fires (person shifts in chair)."""
+    now = time.time()
+    config = _full_house_config()
+    resolver = MapOccupancyResolver(config)
+    areas, sensors = _full_house_areas_and_sensors(config, now)
+
+    # Person enters study
+    _fire(resolver, sensors, areas, "s.entrance", True, now)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 2)
+    _fire(resolver, sensors, areas, "s.study", True, now + 3)
+
+    # Sensors OFF, person sits still
+    _fire(resolver, sensors, areas, "s.entrance", False, now + 5)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 7)
+    _fire(resolver, sensors, areas, "s.study", False, now + 8)
+
+    # Long stillness — all guards expire (>15s cycling guard, >10s cooldown)
+    # corridor fires (maybe a pet, draft, or single housemate)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 45)
+
+    # With no exit-capable evidence, study is displaced (expected)
+    assert areas["study"].occupancy == 0, "Study should be displaced (no entry evidence)"
+    assert areas["corridor_1"].occupancy == 1
+
+    # Corridor sensor goes OFF, then person shifts — study sensor re-fires.
+    # Study must recover immediately (corridor_1 is adjacent + occupied).
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 50)
+    _fire(resolver, sensors, areas, "s.study", True, now + 55)
+    assert areas["study"].occupancy == 1, (
+        "Study did not recover after sensor re-fired!"
+    )
