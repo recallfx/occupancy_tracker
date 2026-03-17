@@ -18,6 +18,7 @@ class AreaState:
 
         # Set by cluster rebuild, not by individual events
         self._occupied: bool = False
+        self.last_occupied_at: float = 0  # Timestamp when area was last occupied
         self.cluster_id: int | None = None
 
     @property
@@ -37,6 +38,8 @@ class AreaState:
     @occupied.setter
     def occupied(self, value: bool) -> None:
         self._occupied = value
+        if value:
+            self.last_occupied_at = self.last_motion or 0
 
     @property
     def claims(self) -> set[str]:
@@ -103,6 +106,7 @@ class AreaState:
         self.cluster_id = None
         self.last_motion = 0
         self.last_off = 0
+        self.last_occupied_at = 0
         self.activity_history = []
 
     @property

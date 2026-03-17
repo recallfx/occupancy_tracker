@@ -1164,3 +1164,42 @@ def test_still_person_recovers_on_sensor_refire():
     assert areas["study"].occupancy == 1, (
         "Study did not recover after sensor re-fired!"
     )
+
+
+# ==================================================================
+# 24. CRITICAL: Recently-occupied room re-activates IMMEDIATELY.
+#     After displacement, sensor re-fires. Must not wait for
+#     persistent activation (2 cycles). The "recently occupied"
+#     check accepts it on the first activation.
+# ==================================================================
+
+def test_recently_occupied_room_reactivates_immediately():
+    """Room displaced, then sensor fires again. Must be immediately
+    occupied — no 10s delay waiting for persistent activation."""
+    now = time.time()
+    config = _full_house_config()
+    resolver = MapOccupancyResolver(config)
+    areas, sensors = _full_house_areas_and_sensors(config, now)
+
+    # Person enters study
+    _fire(resolver, sensors, areas, "s.entrance", True, now)
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 2)
+    _fire(resolver, sensors, areas, "s.study", True, now + 3)
+    _fire(resolver, sensors, areas, "s.entrance", False, now + 5)
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 7)
+    _fire(resolver, sensors, areas, "s.study", False, now + 8)
+
+    # All guards expire, corridor fires → study displaced
+    _fire(resolver, sensors, areas, "s.corridor_1", True, now + 45)
+    assert areas["study"].occupancy == 0, "Setup: study should be displaced"
+
+    # Corridor goes OFF, all sensors quiet
+    _fire(resolver, sensors, areas, "s.corridor_1", False, now + 50)
+
+    # 30 seconds later — no neighbor is occupied, no adjacent evidence.
+    # Without "recently occupied" check, this would be rejected as phantom.
+    # With it, study was occupied within 5 min → accepted immediately.
+    _fire(resolver, sensors, areas, "s.study", True, now + 80)
+    assert areas["study"].occupancy == 1, (
+        "Recently-occupied room not immediately re-activated!"
+    )

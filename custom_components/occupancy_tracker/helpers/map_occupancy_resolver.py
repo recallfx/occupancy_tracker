@@ -37,6 +37,7 @@ class MapOccupancyResolver:
     OUTDOOR_INTRUSION_WINDOW = 300.0  # Magnetic evidence window
     BOOTSTRAP_WINDOW = 120.0          # After restart, allow any indoor activation for 2 min
     RETAINED_INACTIVITY_TIMEOUT = 120.0  # Clear retained rooms after 2 min of no motion
+    RECENTLY_OCCUPIED_WINDOW = 300.0  # Accept re-activation of rooms occupied within 5 min
     SENSOR_CYCLING_GUARD = 15.0          # Protect retained areas with recent motion (covers KNX 5s cycle)
     MIN_RETENTION_COOLDOWN = 10.0        # Minimum seconds before a retained area can be displaced/cleaned
 
@@ -536,6 +537,15 @@ class MapOccupancyResolver:
 
         # Already occupied or retained
         if area.occupied or area_id in self.retained:
+            return True
+
+        # Recently occupied: if this area was occupied within 5 minutes,
+        # it's a known-active area, not a phantom. Accept re-activation
+        # immediately (e.g., after displacement during sensor OFF gap).
+        if (
+            area.last_occupied_at > 0
+            and (timestamp - area.last_occupied_at) <= self.RECENTLY_OCCUPIED_WINDOW
+        ):
             return True
 
         # Check adjacent areas
