@@ -1,6 +1,8 @@
 """The occupancy_tracker integration."""
 
 import logging
+import logging.handlers
+import os
 import time
 
 import voluptuous as vol
@@ -19,8 +21,80 @@ from .helpers.types import OccupancyTrackerConfig
 from .coordinator import OccupancyCoordinator
 
 _LOGGER = logging.getLogger("occupancy_tracker")
+_RAW_LOGGER = logging.getLogger("occupancy_tracker.raw")
+
+# All loggers used by this integration
+_INTEGRATION_LOGGERS = ["occupancy_tracker", "resolver", "coordinator", "anomaly_detector"]
+
+
+def _setup_file_logging(config_dir: str) -> None:
+    """Set up a dedicated log file for the occupancy tracker integration."""
+    log_path = os.path.join(config_dir, "occupancy_tracker.log")
+    handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=3
+    )
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    for name in _INTEGRATION_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+    # Raw sensor event log — clean CSV for replay testing (going forward)
+    raw_path = os.path.join(config_dir, "occupancy_tracker_raw.csv")
+    raw_handler = logging.handlers.RotatingFileHandler(
+        raw_path, maxBytes=10 * 1024 * 1024, backupCount=3
+    )
+    raw_handler.setFormatter(logging.Formatter("%(message)s"))
+    raw_logger = logging.getLogger("occupancy_tracker.raw")
+    raw_logger.addHandler(raw_handler)
+    raw_logger.setLevel(logging.DEBUG)
+    raw_logger.propagate = False
 
 # Schema for individual sensor configuration
+def _export_sensor_history(config_dir: str, config: dict) -> None:
+    """Export sensor history from recorder DB for replay testing."""
+    import sqlite3
+
+    db_path = os.path.join(config_dir, "home-assistant_v2.db")
+    out_path = os.path.join(config_dir, "sensor_history_24h.csv")
+
+    if not os.path.exists(db_path):
+        return
+
+    sensor_ids = list(config.get("sensors", {}).keys())
+    if not sensor_ids:
+        return
+
+    try:
+        db = sqlite3.connect(db_path)
+        placeholders = ",".join("?" for _ in sensor_ids)
+        cutoff = time.time() - 86400
+        rows = db.execute(
+            f"""
+            SELECT sm.entity_id, s.state, s.last_updated_ts
+            FROM states s
+            JOIN states_meta sm ON s.metadata_id = sm.metadata_id
+            WHERE sm.entity_id IN ({placeholders})
+            AND s.state IN ('on', 'off')
+            AND s.last_updated_ts > ?
+            ORDER BY s.last_updated_ts
+            """,
+            (*sensor_ids, cutoff),
+        ).fetchall()
+        db.close()
+
+        with open(out_path, "w") as f:
+            f.write("timestamp,entity_id,state\n")
+            for entity_id, state, ts in rows:
+                f.write(f"{ts},{entity_id},{state}\n")
+
+        _LOGGER.info(f"Exported {len(rows)} sensor events to {out_path}")
+    except Exception as e:
+        _LOGGER.warning(f"Could not export sensor history: {e}")
+
+
 SENSOR_SCHEMA = vol.Schema(
     {
         vol.Required("area"): vol.Any(cv.string, [cv.string]),
@@ -40,6 +114,14 @@ AREA_SCHEMA = vol.Schema(
     extra=vol.ALLOW_EXTRA,
 )
 
+# Schema for open-plan group configuration
+OPEN_PLAN_GROUP_SCHEMA = vol.Schema(
+    {
+        vol.Required("areas"): vol.All([cv.string]),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 # Main configuration schema
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -48,6 +130,9 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Required("areas"): vol.Schema({cv.string: AREA_SCHEMA}),
                 vol.Required("adjacency"): vol.Schema({cv.string: [cv.string]}),
                 vol.Required("sensors"): vol.Schema({cv.entity_id: SENSOR_SCHEMA}),
+                vol.Optional("open_plan_groups", default={}): vol.Schema(
+                    {cv.string: OPEN_PLAN_GROUP_SCHEMA}
+                ),
             }
         )
     },
@@ -67,7 +152,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         "areas": conf.get("areas", {}),
         "adjacency": conf.get("adjacency", {}),
         "sensors": conf.get("sensors", {}),
+        "open_plan_groups": conf.get("open_plan_groups", {}),
     }
+
+    # Set up dedicated log file
+    _setup_file_logging(hass.config.config_dir)
+
+    # One-shot: export sensor history from recorder DB for replay testing
+    _export_sensor_history(hass.config.config_dir, occupancy_config)
 
     # Validate configuration
     if not _validate_config(occupancy_config):
@@ -98,6 +190,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             # Interpret HA state: 'on' becomes True; any other value is False
             sensor_state = new_state.state.lower() == "on"
             timestamp = time.time()
+
+            # Log raw sensor event for replay testing
+            _RAW_LOGGER.debug(
+                f"{timestamp},{entity_id},{'on' if sensor_state else 'off'}"
+            )
 
             # Process event through coordinator
             coordinator.process_sensor_event(
@@ -131,10 +228,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _cleanup_timer)
 
-    # Set up the sensor platform
+    # Set up platforms
+    await async_load_platform(hass, "binary_sensor", DOMAIN, {}, config)
     await async_load_platform(hass, "sensor", DOMAIN, {}, config)
-
-    # Set up the button platform
     await async_load_platform(hass, "button", DOMAIN, {}, config)
 
     _LOGGER.info("Occupancy Tracker integration set up successfully")

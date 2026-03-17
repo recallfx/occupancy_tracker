@@ -73,15 +73,27 @@ class TestAreaState:
         assert len(area.activity_history) == 1
         assert area.activity_history[0] == (timestamp, "entry")
 
+    def test_record_entry_with_claim(self):
+        """Test recording entry with an explicit claim."""
+        area = AreaState("bathroom", {})
+        timestamp = time.time()
+
+        area.record_entry(timestamp, claim_id="c0")
+
+        assert area.occupancy == 1
+        assert area.is_occupied is True
+
     def test_multiple_entries(self):
-        """Test multiple entries increase occupancy."""
+        """Test multiple entries keep area occupied (binary occupancy)."""
         area = AreaState("office", {})
         timestamp = time.time()
 
-        area.record_entry(timestamp)
-        area.record_entry(timestamp + 5)
+        area.record_entry(timestamp, claim_id="c0")
+        area.record_entry(timestamp + 5, claim_id="c1")
 
-        assert area.occupancy == 2
+        # In the clustering model, occupancy is binary (0 or 1)
+        assert area.occupancy == 1
+        assert area.is_occupied is True
 
     def test_record_exit(self):
         """Test recording exit from an area."""
@@ -104,6 +116,16 @@ class TestAreaState:
 
         assert result is False
         assert area.occupancy == 0
+
+    def test_occupancy_setter_zero_clears(self):
+        """Test that setting occupancy to 0 clears occupancy."""
+        area = AreaState("test", {})
+        area.claims.add("c0")
+        assert area.occupancy == 1
+
+        area.occupancy = 0
+        assert area.occupancy == 0
+        assert len(area.claims) == 0
 
     def test_get_inactivity_duration(self):
         """Test calculating inactivity duration."""
@@ -159,3 +181,36 @@ class TestAreaState:
             area.record_motion(timestamp + i)
 
         assert len(area.activity_history) == MAX_HISTORY_LENGTH
+
+    def test_is_occupied_property(self):
+        """Test is_occupied computed property."""
+        area = AreaState("test", {})
+        assert area.is_occupied is False
+
+        area.occupied = True
+        assert area.is_occupied is True
+
+        area.occupied = False
+        assert area.is_occupied is False
+
+    def test_clear_occupancy(self):
+        """Test clear_occupancy clears occupancy."""
+        area = AreaState("test", {})
+        area.occupied = True
+        assert area.occupancy == 1
+
+        area.clear_occupancy(100.0)
+        assert area.occupancy == 0
+        assert len(area.claims) == 0
+
+    def test_reset(self):
+        """Test reset clears all state."""
+        area = AreaState("test", {})
+        area.occupied = True
+        area.last_motion = 100.0
+        area.activity_history = [(100.0, "motion")]
+
+        area.reset()
+        assert area.occupancy == 0
+        assert area.last_motion == 0
+        assert area.activity_history == []

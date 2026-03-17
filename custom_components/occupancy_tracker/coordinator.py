@@ -73,6 +73,9 @@ class OccupancyCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         # Initialize diagnostics
         self.diagnostics = OccupancyDiagnostics(self)
 
+        # Publish initial state immediately so entities don't show stale restored data
+        self.data = self.diagnostics.get_system_status()
+
     def _initialize_areas(self, config: OccupancyTrackerConfig) -> None:
         """Initialize area tracking objects from configuration."""
         for area_id, area_config in config.get("areas", {}).items():

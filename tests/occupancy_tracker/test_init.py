@@ -93,12 +93,13 @@ class TestAsyncSetup:
         """Test that setup loads sensor and button platforms."""
         await async_setup(hass, sample_config)
 
-        # Should load sensor and button platforms
-        assert mock_load_platform.call_count == 2
+        # Should load binary_sensor, sensor, and button platforms
+        assert mock_load_platform.call_count == 3
 
         calls = [call[0] for call in mock_load_platform.call_args_list]
         platforms = [call[1] for call in calls]
 
+        assert "binary_sensor" in platforms
         assert "sensor" in platforms
         assert "button" in platforms
 
@@ -274,32 +275,40 @@ class TestIntegrationDataFlow:
     async def test_sensor_event_updates_area_state(
         self, hass: HomeAssistant, sample_config
     ):
-        """Test that sensor events update area state correctly."""
+        """Test that sensor events update last_motion for occupied areas."""
         await async_setup(hass, sample_config)
 
         coordinator = hass.data[DOMAIN]["coordinator"]
 
-        # Process motion event
-        timestamp = time.time()
-        coordinator.process_sensor_event("binary_sensor.motion_living", True, timestamp)
+        # Bootstrap: seed living_room as occupied
+        t0 = time.time()
+        coordinator.areas["living_room"].record_entry(t0)
+        coordinator.sensors["binary_sensor.motion_living"].update_state(True, t0)
+        coordinator.areas["living_room"].last_motion = t0
 
-        # Area should have motion recorded
-        assert coordinator.areas["living_room"].last_motion == timestamp
-
-    async def test_multiple_sensor_events(self, hass: HomeAssistant, sample_config):
-        """Test processing multiple sensor events."""
-        await async_setup(hass, sample_config)
-
-        coordinator = hass.data[DOMAIN]["coordinator"]
-
-        # Process events from both sensors
-        t1 = time.time()
+        # Re-trigger while occupied — last_motion should update
+        t1 = t0 + 5
+        coordinator.process_sensor_event("binary_sensor.motion_living", False, t0 + 2)
         coordinator.process_sensor_event("binary_sensor.motion_living", True, t1)
 
-        t2 = t1 + 10
+        assert coordinator.areas["living_room"].last_motion == t1
+
+    async def test_multiple_sensor_events(self, hass: HomeAssistant, sample_config):
+        """Test processing events across adjacent areas."""
+        await async_setup(hass, sample_config)
+
+        coordinator = hass.data[DOMAIN]["coordinator"]
+
+        # Bootstrap: seed living_room as occupied
+        t1 = time.time()
+        coordinator.areas["living_room"].record_entry(t1)
+        coordinator.sensors["binary_sensor.motion_living"].update_state(True, t1)
+        coordinator.areas["living_room"].last_motion = t1
+
+        # Kitchen motion — living_room is adjacent and occupied, so accepted
+        t2 = t1 + 2
         coordinator.process_sensor_event("binary_sensor.motion_kitchen", True, t2)
 
-        # Both areas should have motion
         assert coordinator.areas["living_room"].last_motion == t1
         assert coordinator.areas["kitchen"].last_motion == t2
 
@@ -311,10 +320,14 @@ class TestIntegrationDataFlow:
 
         coordinator = hass.data[DOMAIN]["coordinator"]
 
-        # Simulate person entering (living room is not exit_capable, will create warning)
-        coordinator.process_sensor_event(
-            "binary_sensor.motion_living", True, time.time()
-        )
+        # Bootstrap: directly set up occupancy in living_room.
+        # The motion-ON entry logic rejects phantom entries in indoor
+        # non-exit-capable areas with no plausible adjacent source,
+        # so we seed the initial state directly.
+        ts = time.time()
+        coordinator.areas["living_room"].record_entry(ts)
+        coordinator.sensors["binary_sensor.motion_living"].update_state(True, ts)
+        coordinator.areas["living_room"].last_motion = ts
 
-        # Should have occupancy (even if unexpected)
+        # Should have occupancy
         assert coordinator.get_occupancy("living_room") >= 1

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
 from syrupy.assertion import SnapshotAssertion
@@ -11,11 +13,18 @@ from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSn
 
 
 class SensorEventHelper:
-    """Helper to trigger sensor events with precise timestamps."""
+    """Helper to trigger sensor events with precise timestamps.
+
+    Uses real wall-clock time as the base so that timestamps are compatible
+    with the coordinator's periodic ``check_timeouts`` (which calls
+    ``time.time()``).  Explicit ``timestamp`` values are treated as offsets
+    from the base.
+    """
 
     def __init__(self, coordinator: OccupancyCoordinator):
         self.coordinator = coordinator
-        self.current_time = 0.0
+        self._base_time = time.time()
+        self.current_time = self._base_time
 
     def trigger_sensor(
         self,
@@ -29,13 +38,13 @@ class SensorEventHelper:
         Args:
             sensor_id: The sensor entity ID
             state: True for ON, False for OFF
-            timestamp: Explicit timestamp (overrides delay)
+            timestamp: Explicit offset from base time (overrides delay)
             delay: Seconds to advance time before triggering
         """
         if delay is not None:
             self.current_time += delay
         if timestamp is not None:
-            self.current_time = timestamp
+            self.current_time = self._base_time + timestamp
 
         state_str = "on" if state else "off"
 

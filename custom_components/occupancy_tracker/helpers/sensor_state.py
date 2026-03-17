@@ -9,8 +9,11 @@ class SensorState:
     def __init__(self, sensor_id: str, sensor_config: SensorConfig, timestamp: float):
         self.id = sensor_id
         self.config = sensor_config
+        # Pre-compute normalized area IDs (config never changes after init)
+        from .constants import normalize_area_ids
+        self.area_ids: list[str] = normalize_area_ids(sensor_config.get("area"))
         self.current_state = False
-        self.last_changed = timestamp
+        self.last_changed = 0  # Only set by real state changes, not init
         self.activated_at = None  # Timestamp when sensor last transitioned OFF→ON (None if never activated)
         self.last_update_time = timestamp
         self.history = []  # List of (timestamp, state) tuples

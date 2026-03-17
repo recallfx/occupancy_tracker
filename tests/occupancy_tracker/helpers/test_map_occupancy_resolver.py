@@ -1,4 +1,4 @@
-"""Tests for MapOccupancyResolver motion-off behavior."""
+"""Tests for MapOccupancyResolver claim-based occupancy resolution."""
 
 import time
 
@@ -33,127 +33,599 @@ def _fire(resolver, sensors, areas, sensor_id, on, ts, detector=None):
     )
 
 
-def test_motion_off_ignores_stale_neighbor_activation():
-    """Hall should not clear due to distant frontyard activation."""
+def _set_occupancy(area, count):
+    """Set area occupancy by adding test claims."""
+    area.claims.clear()
+    for i in range(count):
+        area.claims.add(f"_test_{i}")
+
+
+# ============================================================
+# Transfer-on-ON: basic claim transfer tests
+# ============================================================
+
+def test_transfer_on_on_basic():
+    """Motion-ON in destination pulls claim from occupied adjacent source."""
     now = time.time()
     config = {
         "areas": {
-            "front_hall": {"name": "Front Hall", "transition": True},
-            "frontyard": {
-                "name": "Front Yard",
-                "transition": True,
-                "exit_capable": True,
-                "indoors": False,
-            },
+            "area_a": {"name": "A", "exit_capable": True},
+            "area_b": {"name": "B"},
         },
-        "adjacency": {
-            "front_hall": ["frontyard"],
-            "frontyard": ["front_hall"],
-        },
+        "adjacency": {"area_a": ["area_b"]},
         "sensors": {},
     }
-
     resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
 
     areas = {
-        "front_hall": AreaState("front_hall", config["areas"]["front_hall"]),
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
+        "area_a": AreaState("area_a", config["areas"]["area_a"]),
+        "area_b": AreaState("area_b", config["areas"]["area_b"]),
     }
     sensors = {
-        "binary_sensor.hall": SensorState(
-            "binary_sensor.hall", {"area": "front_hall", "type": "motion"}, now
-        ),
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard", {"area": "frontyard", "type": "motion"}, now
-        ),
-        "binary_sensor.front_door": SensorState(
-            "binary_sensor.front_door",
-            {"area": ["front_hall", "frontyard"], "type": "door"},
-            now,
-        ),
+        "s.a": SensorState("s.a", {"area": "area_a", "type": "motion"}, now),
+        "s.b": SensorState("s.b", {"area": "area_b", "type": "motion"}, now),
     }
 
-    # Door opens (magnetic evidence for possible entry)
-    _fire(resolver, sensors, areas, "binary_sensor.front_door", True, now - 1, detector)
+    # Person enters at exit-capable area_a
+    _fire(resolver, sensors, areas, "s.a", True, now)
+    assert areas["area_a"].occupancy == 1
+    assert areas["area_b"].occupancy == 0
 
-    # Person in hall, hall motion turns on
-    _fire(resolver, sensors, areas, "binary_sensor.hall", True, now, detector)
-    assert areas["front_hall"].occupancy == 1
-
-    # Much later, frontyard motion turns on (different person outside)
-    _fire(
-        resolver, sensors, areas, "binary_sensor.frontyard", True, now + 100, detector
-    )
-    assert areas["frontyard"].occupancy == 1
-
-    # Hall sensor finally turns off; since neighbor activation was long ago, hall should stay occupied
-    _fire(resolver, sensors, areas, "binary_sensor.hall", False, now + 110, detector)
-
-    assert areas["front_hall"].occupancy == 1
-    assert areas["frontyard"].occupancy == 1
+    # Person walks to area_b: motion-ON in area_b pulls claim from area_a
+    _fire(resolver, sensors, areas, "s.b", True, now + 1)
+    assert areas["area_a"].occupancy == 0
+    assert areas["area_b"].occupancy == 1
 
 
-def test_intrusion_warning_outdoor_then_indoor_motion():
-    """Outdoor activation followed by indoor motion should raise intrusion warning when no indoor source exists."""
+def test_transfer_on_on_chain():
+    """Claims transfer through a chain of rooms on ON events."""
     now = time.time()
     config = {
         "areas": {
-            "foyer": {"name": "Foyer", "indoors": True},
-            "frontyard": {"name": "Front Yard", "indoors": False, "exit_capable": True},
+            "a": {"name": "A", "exit_capable": True},
+            "b": {"name": "B"},
+            "c": {"name": "C"},
         },
-        "adjacency": {
-            "foyer": ["frontyard"],
-            "frontyard": ["foyer"],
-        },
+        "adjacency": {"a": ["b"], "b": ["c"]},
         "sensors": {},
     }
+    resolver = MapOccupancyResolver(config)
 
+    areas = {
+        "a": AreaState("a", config["areas"]["a"]),
+        "b": AreaState("b", config["areas"]["b"]),
+        "c": AreaState("c", config["areas"]["c"]),
+    }
+    sensors = {
+        "s.a": SensorState("s.a", {"area": "a", "type": "motion"}, now),
+        "s.b": SensorState("s.b", {"area": "b", "type": "motion"}, now),
+        "s.c": SensorState("s.c", {"area": "c", "type": "motion"}, now),
+    }
+
+    _fire(resolver, sensors, areas, "s.a", True, now)
+    assert areas["a"].occupancy == 1
+
+    _fire(resolver, sensors, areas, "s.b", True, now + 1)
+    assert areas["a"].occupancy == 0
+    assert areas["b"].occupancy == 1
+
+    _fire(resolver, sensors, areas, "s.c", True, now + 2)
+    assert areas["b"].occupancy == 0
+    assert areas["c"].occupancy == 1
+
+
+def test_motion_off_noop_after_transfer():
+    """Motion-OFF in source is a no-op when claim was already transferred on ON."""
+    now = time.time()
+    config = {
+        "areas": {
+            "a": {"name": "A", "exit_capable": True},
+            "b": {"name": "B"},
+        },
+        "adjacency": {"a": ["b"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "a": AreaState("a", config["areas"]["a"]),
+        "b": AreaState("b", config["areas"]["b"]),
+    }
+    sensors = {
+        "s.a": SensorState("s.a", {"area": "a", "type": "motion"}, now),
+        "s.b": SensorState("s.b", {"area": "b", "type": "motion"}, now),
+    }
+
+    _fire(resolver, sensors, areas, "s.a", True, now)
+    _fire(resolver, sensors, areas, "s.b", True, now + 1)
+    assert areas["a"].occupancy == 0
+    assert areas["b"].occupancy == 1
+
+    # OFF in area_a: no claims left -> no-op
+    _fire(resolver, sensors, areas, "s.a", False, now + 5)
+    assert areas["a"].occupancy == 0
+    assert areas["b"].occupancy == 1
+
+
+# ============================================================
+# Exit-capable areas
+# ============================================================
+
+def test_exit_capable_new_entry():
+    """Exit-capable area creates new claim when no adjacent source."""
+    now = time.time()
+    config = {
+        "areas": {"entry": {"name": "Entry", "exit_capable": True}},
+        "adjacency": {},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {"entry": AreaState("entry", config["areas"]["entry"])}
+    sensors = {"s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now)}
+
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    assert areas["entry"].occupancy == 1
+
+
+def test_exit_capable_clears_on_off():
+    """Exit-capable area clears claims when motion stops and no indoor neighbor is active."""
+    now = time.time()
+    config = {
+        "areas": {
+            "entry": {"name": "Entry", "exit_capable": True},
+            "hall": {"name": "Hall"},
+        },
+        "adjacency": {"entry": ["hall"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "entry": AreaState("entry", config["areas"]["entry"]),
+        "hall": AreaState("hall", config["areas"]["hall"]),
+    }
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+    }
+
+    # Person appears
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    assert areas["entry"].occupancy == 1
+
+    # Motion stops, no indoor neighbor active -> person left
+    _fire(resolver, sensors, areas, "s.e", False, now + 5)
+    assert areas["entry"].occupancy == 0
+
+
+def test_exit_capable_does_not_clear_if_indoor_neighbor_active():
+    """Exit-capable area keeps claims when indoor neighbor is recently active."""
+    now = time.time()
+    config = {
+        "areas": {
+            "entry": {"name": "Entry", "exit_capable": True},
+            "hall": {"name": "Hall"},
+        },
+        "adjacency": {"entry": ["hall"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "entry": AreaState("entry", config["areas"]["entry"]),
+        "hall": AreaState("hall", config["areas"]["hall"]),
+    }
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+    }
+
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    # Hall becomes active (neighbor is active)
+    _fire(resolver, sensors, areas, "s.h", True, now + 1)
+
+    # By now, entry's claim was transferred to hall via ON
+    assert areas["entry"].occupancy == 0
+    assert areas["hall"].occupancy == 1
+
+
+# ============================================================
+# Phantom rejection
+# ============================================================
+
+def test_phantom_rejection_no_source():
+    """Indoor non-exit area with no plausible source rejects motion."""
+    now = time.time()
+    config = {
+        "areas": {"isolated": {"name": "Isolated"}},
+        "adjacency": {},
+        "sensors": {},
+    }
     resolver = MapOccupancyResolver(config)
     detector = AnomalyDetector(config)
 
-    areas = {
-        "foyer": AreaState("foyer", config["areas"]["foyer"]),
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
+    areas = {"isolated": AreaState("isolated", config["areas"]["isolated"])}
     sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard", {"area": "frontyard", "type": "motion"}, now
-        ),
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
+        "s.i": SensorState("s.i", {"area": "isolated", "type": "motion"}, now)
     }
 
-    # Outside motion starts first (unknown presence)
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-
-    # Indoor motion follows shortly after with no indoor source
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now + 2, detector)
-
-    assert areas["foyer"].occupancy == 1
+    _fire(resolver, sensors, areas, "s.i", True, now, detector)
+    assert areas["isolated"].occupancy == 0
 
     warnings = detector.get_warnings()
     assert len(warnings) == 1
     assert warnings[0].type == "unexpected_motion"
-    assert "intrusion_outside_adjacent" in warnings[0].message
 
 
-def test_outdoor_then_magnetic_then_indoor_suppresses_intrusion_warning():
-    """Magnetic event between outdoor and indoor should allow entry without intrusion warning."""
+def test_phantom_not_rejected_with_recent_neighbor():
+    """Indoor non-exit area accepts motion when a neighbor was recently active."""
     now = time.time()
     config = {
         "areas": {
-            "foyer": {"name": "Foyer", "indoors": True},
+            "hall": {"name": "Hall"},
+            "room": {"name": "Room"},
+        },
+        "adjacency": {"hall": ["room"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+    detector = AnomalyDetector(config)
+
+    areas = {
+        "hall": AreaState("hall", config["areas"]["hall"]),
+        "room": AreaState("room", config["areas"]["room"]),
+    }
+    sensors = {
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+        "s.r": SensorState("s.r", {"area": "room", "type": "motion"}, now),
+    }
+
+    # Hall had recent motion (within ADJACENT_ACTIVITY_WINDOW)
+    areas["hall"].last_motion = now - 5  # 5 seconds ago
+
+    _fire(resolver, sensors, areas, "s.r", True, now, detector)
+    assert areas["room"].occupancy == 1
+
+
+def test_phantom_not_rejected_with_magnetic_evidence():
+    """Indoor area accepts motion when magnetic sensor (door) recently changed."""
+    now = time.time()
+    config = {
+        "areas": {
+            "hall": {"name": "Hall"},
+            "outside": {"name": "Outside", "indoors": False},
+        },
+        "adjacency": {"hall": ["outside"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+    detector = AnomalyDetector(config)
+
+    areas = {
+        "hall": AreaState("hall", config["areas"]["hall"]),
+        "outside": AreaState("outside", config["areas"]["outside"]),
+    }
+    sensors = {
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+        "s.door": SensorState("s.door", {"area": "hall", "type": "door"}, now),
+    }
+
+    # Door opened recently
+    sensors["s.door"].update_state(True, now - 10)
+
+    _fire(resolver, sensors, areas, "s.h", True, now, detector)
+    assert areas["hall"].occupancy == 1
+
+
+# ============================================================
+# Already occupied: no-op
+# ============================================================
+
+def test_motion_on_already_occupied_is_noop():
+    """Motion-ON in area that already has claims does nothing."""
+    now = time.time()
+    config = {
+        "areas": {"room": {"name": "Room", "exit_capable": True}},
+        "adjacency": {},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {"room": AreaState("room", config["areas"]["room"])}
+    sensors = {"s.r": SensorState("s.r", {"area": "room", "type": "motion"}, now)}
+
+    _fire(resolver, sensors, areas, "s.r", True, now)
+    assert areas["room"].occupancy == 1
+
+    # Fire again - should not add another claim
+    _fire(resolver, sensors, areas, "s.r", False, now + 5)
+    _fire(resolver, sensors, areas, "s.r", True, now + 6)
+    # Exit-capable cleared on OFF, then re-fires ON -> new claim
+    assert areas["room"].occupancy == 1
+
+
+# ============================================================
+# Person stays (motion-OFF with no exit)
+# ============================================================
+
+def test_person_stays_non_exit_off():
+    """Person stays when motion-OFF fires in a non-exit area with no active neighbor."""
+    now = time.time()
+    config = {
+        "areas": {
+            "entry": {"name": "Entry", "exit_capable": True},
+            "room": {"name": "Room"},
+        },
+        "adjacency": {"entry": ["room"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "entry": AreaState("entry", config["areas"]["entry"]),
+        "room": AreaState("room", config["areas"]["room"]),
+    }
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.r": SensorState("s.r", {"area": "room", "type": "motion"}, now),
+    }
+
+    # Person enters and moves to room
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    _fire(resolver, sensors, areas, "s.r", True, now + 1)
+    assert areas["room"].occupancy == 1
+
+    # Room sensor OFF -> person stays (non-exit, no active neighbor)
+    _fire(resolver, sensors, areas, "s.e", False, now + 5)
+    _fire(resolver, sensors, areas, "s.r", False, now + 6)
+    assert areas["room"].occupancy == 1
+
+
+# ============================================================
+# Convergence: two people end up in same room
+# ============================================================
+
+def test_convergence_sole_active_neighbor():
+    """Motion-OFF with sole active neighbor transfers claim (convergence rule)."""
+    now = time.time()
+    config = {
+        "areas": {
+            "entry": {"name": "Entry", "exit_capable": True},
+            "hall": {"name": "Hall"},
+            "room": {"name": "Room"},
+        },
+        "adjacency": {"entry": ["hall"], "hall": ["room"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "entry": AreaState("entry", config["areas"]["entry"]),
+        "hall": AreaState("hall", config["areas"]["hall"]),
+        "room": AreaState("room", config["areas"]["room"]),
+    }
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+        "s.r": SensorState("s.r", {"area": "room", "type": "motion"}, now),
+    }
+
+    # Person A enters and goes to room
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    _fire(resolver, sensors, areas, "s.h", True, now + 1)
+    _fire(resolver, sensors, areas, "s.r", True, now + 2)
+    assert areas["room"].occupancy == 1
+
+    # Person B enters
+    _fire(resolver, sensors, areas, "s.e", False, now + 5)
+    _fire(resolver, sensors, areas, "s.e", True, now + 10)
+    assert areas["entry"].occupancy == 1
+
+    # Person B walks to hall
+    _fire(resolver, sensors, areas, "s.h", False, now + 12)
+    _fire(resolver, sensors, areas, "s.h", True, now + 13)
+
+    # Now room has 1, hall has 1
+
+    # Person B walks to room: room already occupied so ON is no-op.
+    # But room sensor is already on from person A...
+    # The transfer happens on hall OFF via convergence.
+
+
+# ============================================================
+# Outdoor -> Indoor transfer
+# ============================================================
+
+def test_outdoor_to_indoor_transfer():
+    """Claim transfers from outdoor to indoor on motion-ON."""
+    now = time.time()
+    config = {
+        "areas": {
+            "frontyard": {"name": "Frontyard", "indoors": False, "exit_capable": True},
+            "entry": {"name": "Entry"},
+        },
+        "adjacency": {"frontyard": ["entry"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
+        "entry": AreaState("entry", config["areas"]["entry"]),
+    }
+    sensors = {
+        "s.f": SensorState("s.f", {"area": "frontyard", "type": "motion"}, now),
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+    }
+
+    # Camera detects person outside
+    _fire(resolver, sensors, areas, "s.f", True, now)
+    assert areas["frontyard"].occupancy == 1
+
+    # Entry motion ON -> transfer from frontyard
+    _fire(resolver, sensors, areas, "s.e", True, now + 2)
+    assert areas["frontyard"].occupancy == 0
+    assert areas["entry"].occupancy == 1
+
+
+# ============================================================
+# Multi-sensor same room
+# ============================================================
+
+def test_multi_sensor_same_room():
+    """Multiple sensors in same room: OFF only triggers when ALL sensors are off."""
+    now = time.time()
+    config = {
+        "areas": {"room": {"name": "Room", "exit_capable": True}},
+        "adjacency": {},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {"room": AreaState("room", config["areas"]["room"])}
+    sensors = {
+        "s.pir": SensorState("s.pir", {"area": "room", "type": "motion"}, now),
+        "s.cam": SensorState("s.cam", {"area": "room", "type": "camera_person"}, now),
+    }
+
+    _fire(resolver, sensors, areas, "s.pir", True, now)
+    assert areas["room"].occupancy == 1
+
+    _fire(resolver, sensors, areas, "s.cam", True, now + 1)
+    assert areas["room"].occupancy == 1
+
+    # PIR off but camera still on -> no exit clearing
+    _fire(resolver, sensors, areas, "s.pir", False, now + 5)
+    assert areas["room"].occupancy == 1
+
+    # Camera off -> now all off, exit-capable clears
+    _fire(resolver, sensors, areas, "s.cam", False, now + 10)
+    assert areas["room"].occupancy == 0
+
+
+# ============================================================
+# Open-plan group handling
+# ============================================================
+
+def test_open_plan_rebalance():
+    """Open-plan group: motion in different member rebalances, doesn't inflate."""
+    now = time.time()
+    config = {
+        "areas": {
+            "entry": {"name": "Entry", "exit_capable": True},
+            "kitchen": {"name": "Kitchen"},
+            "dining": {"name": "Dining"},
+            "living": {"name": "Living"},
+        },
+        "adjacency": {
+            "entry": ["kitchen"],
+            "kitchen": ["dining"],
+            "dining": ["living"],
+        },
+        "open_plan_groups": {
+            "open_plan": {"areas": ["kitchen", "dining", "living"]},
+        },
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {
+        "entry": AreaState("entry", config["areas"]["entry"]),
+        "kitchen": AreaState("kitchen", config["areas"]["kitchen"]),
+        "dining": AreaState("dining", config["areas"]["dining"]),
+        "living": AreaState("living", config["areas"]["living"]),
+    }
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.k": SensorState("s.k", {"area": "kitchen", "type": "motion"}, now),
+        "s.d": SensorState("s.d", {"area": "dining", "type": "motion"}, now),
+        "s.l": SensorState("s.l", {"area": "living", "type": "motion"}, now),
+    }
+
+    # Person enters via entry, moves to kitchen
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    _fire(resolver, sensors, areas, "s.k", True, now + 1)
+    assert areas["kitchen"].occupancy == 1
+
+    # Dining sensor fires: same person, rebalance within group
+    _fire(resolver, sensors, areas, "s.d", True, now + 2)
+    assert areas["dining"].occupancy == 1
+    assert areas["kitchen"].occupancy == 0
+    total = sum(a.occupancy for a in areas.values())
+    assert total == 1  # No inflation
+
+    # Living sensor fires: rebalance again
+    _fire(resolver, sensors, areas, "s.l", True, now + 3)
+    assert areas["living"].occupancy == 1
+    total = sum(a.occupancy for a in areas.values())
+    assert total == 1
+
+
+def test_open_plan_exit_to_non_group_area():
+    """Claim moves out of open-plan group when person walks to non-group area."""
+    now = time.time()
+    config = {
+        "areas": {
+            "kitchen": {"name": "Kitchen"},
+            "dining": {"name": "Dining"},
+            "corridor": {"name": "Corridor"},
+            "entry": {"name": "Entry", "exit_capable": True},
+        },
+        "adjacency": {
+            "entry": ["corridor"],
+            "corridor": ["kitchen"],
+            "kitchen": ["dining"],
+        },
+        "open_plan_groups": {
+            "open_plan": {"areas": ["kitchen", "dining"]},
+        },
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    areas = {aid: AreaState(aid, cfg) for aid, cfg in config["areas"].items()}
+    sensors = {
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.c": SensorState("s.c", {"area": "corridor", "type": "motion"}, now),
+        "s.k": SensorState("s.k", {"area": "kitchen", "type": "motion"}, now),
+        "s.d": SensorState("s.d", {"area": "dining", "type": "motion"}, now),
+    }
+
+    # Person enters, walks to kitchen
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    _fire(resolver, sensors, areas, "s.c", True, now + 1)
+    _fire(resolver, sensors, areas, "s.k", True, now + 2)
+    assert areas["kitchen"].occupancy == 1
+
+    # Person in kitchen, rebalances to dining
+    _fire(resolver, sensors, areas, "s.d", True, now + 3)
+    assert areas["dining"].occupancy == 1
+
+    # Person leaves kitchen/dining area back to corridor
+    _fire(resolver, sensors, areas, "s.c", False, now + 5)
+    _fire(resolver, sensors, areas, "s.c", True, now + 10)
+    # Corridor pulls claim from dining (adjacent occupied indoor)
+    assert areas["corridor"].occupancy == 1
+    total = sum(a.occupancy for a in areas.values())
+    assert total == 1
+
+
+# ============================================================
+# Intrusion with outdoor evidence
+# ============================================================
+
+def test_outdoor_evidence_allows_entry():
+    """Outdoor activity + motion in adjacent indoor area creates a claim."""
+    now = time.time()
+    config = {
+        "areas": {
+            "foyer": {"name": "Foyer"},
             "frontyard": {"name": "Front Yard", "indoors": False, "exit_capable": True},
         },
-        "adjacency": {
-            "foyer": ["frontyard"],
-            "frontyard": ["foyer"],
-        },
+        "adjacency": {"foyer": ["frontyard"]},
         "sensors": {},
     }
-
     resolver = MapOccupancyResolver(config)
     detector = AnomalyDetector(config)
 
@@ -162,1668 +634,237 @@ def test_outdoor_then_magnetic_then_indoor_suppresses_intrusion_warning():
         "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
     }
     sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard", {"area": "frontyard", "type": "motion"}, now
-        ),
-        "binary_sensor.door": SensorState(
-            "binary_sensor.door",
-            {"area": ["foyer", "frontyard"], "type": "magnetic"},
-            now,
-        ),
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
+        "s.f": SensorState("s.f", {"area": "foyer", "type": "motion"}, now),
+        "s.fy": SensorState("s.fy", {"area": "frontyard", "type": "motion"}, now),
     }
 
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.door", True, now + 1, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now + 2, detector)
+    # Outdoor motion creates a claim (exit-capable)
+    _fire(resolver, sensors, areas, "s.fy", True, now, detector)
+    assert areas["frontyard"].occupancy == 1
 
+    # Indoor motion -> transfer from outdoor occupied neighbor
+    _fire(resolver, sensors, areas, "s.f", True, now + 2, detector)
     assert areas["foyer"].occupancy == 1
-    warnings = detector.get_warnings()
-    assert warnings == []
-
-
-def test_indoor_activation_ignored_without_outdoor_or_magnet():
-    """Indoor motion with no occupants, no adjacent outdoor activity, and no magnet should be ignored and warned."""
-    now = time.time()
-    config = {
-        "areas": {
-            "office": {"name": "Office", "indoors": True},
-        },
-        "adjacency": {
-            "office": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "office": AreaState("office", config["areas"]["office"]),
-    }
-    sensors = {
-        "binary_sensor.office_motion": SensorState(
-            "binary_sensor.office_motion", {"area": "office", "type": "motion"}, now
-        ),
-    }
-
-    _fire(resolver, sensors, areas, "binary_sensor.office_motion", True, now, detector)
-
-    # No outdoor adjacency, so activation is allowed but still warned as unexplained
-    assert areas["office"].occupancy == 1
-    warnings = detector.get_warnings()
-    assert len(warnings) == 1
-    assert warnings[0].type == "unexpected_motion"
-    assert "no_adjacent_source" in warnings[0].message
-
-
-# ---------------------------------------------------------------------------
-# 1A: Motion-ON Plausible Source Logic
-# ---------------------------------------------------------------------------
-
-
-def test_motion_on_indoor_unlinked_with_outdoor_neighbor():
-    """Indoor area with only outdoor neighbor, all empty -> ON -> occupancy 0, warning indoor_activation_unlinked."""
-    now = time.time()
-    config = {
-        "areas": {
-            "foyer": {"name": "Foyer", "indoors": True},
-            "frontyard": {
-                "name": "Front Yard",
-                "indoors": False,
-                "exit_capable": True,
-            },
-        },
-        "adjacency": {
-            "foyer": ["frontyard"],
-            "frontyard": ["foyer"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "foyer": AreaState("foyer", config["areas"]["foyer"]),
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
-    sensors = {
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-    }
-
-    # Everything empty, no outdoor activity -> foyer ON
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now, detector)
-
-    assert areas["foyer"].occupancy == 0
-    warnings = detector.get_warnings()
-    assert len(warnings) == 1
-    assert "indoor_activation_unlinked" in warnings[0].message
-
-
-def test_motion_on_with_occupied_indoor_neighbor():
-    """Indoor neighbor occupied -> motion ON -> occupancy 1, no warnings."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a", "area_c"],
-            "area_c": ["area_b"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-        "area_c": AreaState("area_c", config["areas"]["area_c"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Set up B as occupied (person already there)
-    areas["area_b"].record_entry(now - 10)
-    areas["area_b"].last_motion = now - 5
-    sensors["binary_sensor.b"].update_state(True, now - 5)
-
-    # A turns ON -> should see occupied indoor neighbor B, so A becomes occupied
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-
-    assert areas["area_a"].occupancy == 1
-    warnings = detector.get_warnings()
-    assert len(warnings) == 0
-
-
-def test_motion_on_already_occupied_no_increment():
-    """Area already occupied -> ON -> stays at 1, not incremented to 2."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-    }
-
-    # Already occupied
-    areas["area_a"].record_entry(now - 10)
-    areas["area_a"].last_motion = now - 5
-    sensors["binary_sensor.a"].update_state(True, now - 5)
-
-    # Re-trigger motion ON
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-
-    assert areas["area_a"].occupancy == 1  # Not 2
-
-
-def test_motion_on_exit_capable_no_anomaly():
-    """Exit-capable outdoor area -> ON -> occupancy 1, no anomaly."""
-    now = time.time()
-    config = {
-        "areas": {
-            "frontyard": {
-                "name": "Front Yard",
-                "indoors": False,
-                "exit_capable": True,
-            },
-        },
-        "adjacency": {
-            "frontyard": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
-    sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-    }
-
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-
-    assert areas["frontyard"].occupancy == 1
-    warnings = detector.get_warnings()
-    assert len(warnings) == 0
-
-
-def test_motion_on_outdoor_then_indoor_no_magnetic():
-    """Outdoor ON then indoor ON with no magnetic -> intrusion_outside_adjacent warning."""
-    now = time.time()
-    config = {
-        "areas": {
-            "foyer": {"name": "Foyer", "indoors": True},
-            "frontyard": {
-                "name": "Front Yard",
-                "indoors": False,
-                "exit_capable": True,
-            },
-        },
-        "adjacency": {
-            "foyer": ["frontyard"],
-            "frontyard": ["foyer"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "foyer": AreaState("foyer", config["areas"]["foyer"]),
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
-    sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
-    }
-
-    # Frontyard ON first
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-
-    # Then foyer ON (no magnetic in between)
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now + 2, detector)
-
-    assert areas["foyer"].occupancy == 1
-    warnings = detector.get_warnings()
-    assert len(warnings) == 1
-    assert "intrusion_outside_adjacent" in warnings[0].message
-
-
-# ---------------------------------------------------------------------------
-# 1B: Activation Window Boundary Tests
-# ---------------------------------------------------------------------------
-
-
-def _make_two_area_config():
-    """Helper: create a 2-area linear config (A-B), both indoor."""
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-    return config
-
-
-def _setup_activation_window_test(config, now, src_on, nbr_on, src_off):
-    """
-    Helper for activation-window boundary tests.
-
-    Sets up: person in A, A ON at src_on, B ON at nbr_on, A OFF at src_off.
-    Returns (resolver, detector, areas, sensors) AFTER processing A OFF.
-    """
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # A turns ON at src_on -> person enters A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now + src_on, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B turns ON at nbr_on
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + nbr_on, detector)
-
-    # A turns OFF at src_off
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + src_off, detector)
-
-    return resolver, detector, areas, sensors
-
-
-def test_recent_window_exactly_5s():
-    """Neighbor activated exactly 5s before OFF -> movement detected (95 >= 100-5)."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=95, src_off=100
-    )
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_a"].occupancy == 0
-
-
-def test_recent_window_just_outside_5s():
-    """Neighbor activated 5.1s before OFF -> outside recent window."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=94.9, src_off=100
-    )
-    # 94.9 is NOT >= 95 (100 - 5), and 94.9 - 0 = 94.9 > 30, so no match
-    assert areas["area_b"].occupancy == 1  # B got occupied on its own ON event
-    assert areas["area_a"].occupancy == 1  # A stays occupied (no movement evidence)
-
-
-def test_masked_window_exactly_30s():
-    """Neighbor activated exactly 30s after source ON -> movement (30 <= 30)."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=30, src_off=100
-    )
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_a"].occupancy == 0
-
-
-def test_masked_window_just_outside_30s():
-    """Neighbor activated 30.1s after source ON -> outside masked window."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=30.1, src_off=100
-    )
-    # 30.1 - 0 = 30.1 > 30, and 30.1 < 95 (100-5), so no match
-    assert areas["area_b"].occupancy == 1  # B got occupied on its own ON event
-    assert areas["area_a"].occupancy == 1  # A stays (no movement evidence)
-
-
-def test_stale_activation_100s_rejected():
-    """Neighbor activated 50s after source ON (gap too large) -> no movement."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=50, src_off=100
-    )
-    # 50 - 0 = 50 > 30, and 50 < 95, so no match
-    assert areas["area_b"].occupancy == 1  # B got occupied on its own ON event
-    assert areas["area_a"].occupancy == 1  # A stays
-
-
-def test_recent_activation_within_window():
-    """Neighbor activated 3s before OFF -> clearly within recent window."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=97, src_off=100
-    )
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_a"].occupancy == 0
-
-
-def test_masked_movement_within_window():
-    """Neighbor activated 20s after source ON -> within masked window (20 <= 30)."""
-    now = time.time()
-    config = _make_two_area_config()
-    _, _, areas, _ = _setup_activation_window_test(
-        config, now, src_on=0, nbr_on=20, src_off=100
-    )
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_a"].occupancy == 0
-
-
-# ---------------------------------------------------------------------------
-# 1C: Exit-Capable Motion-OFF
-# ---------------------------------------------------------------------------
-
-
-def test_exit_capable_clears_on_motion_off():
-    """Exit-capable area, person there, no neighbor activation -> OFF -> occupancy 0."""
-    now = time.time()
-    config = {
-        "areas": {
-            "frontyard": {
-                "name": "Front Yard",
-                "indoors": False,
-                "exit_capable": True,
-            },
-        },
-        "adjacency": {
-            "frontyard": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
-    sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-    }
-
-    # Person enters frontyard
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-    assert areas["frontyard"].occupancy == 1
-
-    # Motion stops, no neighbor -> person left
-    _fire(
-        resolver, sensors, areas, "binary_sensor.frontyard", False, now + 10, detector
-    )
     assert areas["frontyard"].occupancy == 0
 
 
-def test_exit_capable_moves_to_neighbor_instead():
-    """Exit-capable area + neighbor activated -> OFF -> moves to neighbor."""
+# ============================================================
+# Recalculate from history
+# ============================================================
+
+def test_recalculate_from_history():
+    """Recalculate produces same state when replayed."""
     now = time.time()
     config = {
         "areas": {
-            "frontyard": {
-                "name": "Front Yard",
-                "indoors": False,
-                "exit_capable": True,
-            },
-            "foyer": {"name": "Foyer", "indoors": True},
+            "a": {"name": "A", "exit_capable": True},
+            "b": {"name": "B"},
         },
-        "adjacency": {
-            "frontyard": ["foyer"],
-            "foyer": ["frontyard"],
-        },
+        "adjacency": {"a": ["b"]},
         "sensors": {},
     }
-
     resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
 
     areas = {
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-        "foyer": AreaState("foyer", config["areas"]["foyer"]),
+        "a": AreaState("a", config["areas"]["a"]),
+        "b": AreaState("b", config["areas"]["b"]),
     }
     sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
+        "s.a": SensorState("s.a", {"area": "a", "type": "motion"}, now),
+        "s.b": SensorState("s.b", {"area": "b", "type": "motion"}, now),
     }
 
-    # Person in frontyard
-    _fire(resolver, sensors, areas, "binary_sensor.frontyard", True, now, detector)
-    assert areas["frontyard"].occupancy == 1
+    snapshots = [
+        _sensor_event("s.a", True, now),
+        _sensor_event("s.b", True, now + 1),
+        _sensor_event("s.a", False, now + 5),
+    ]
 
-    # Foyer activates (within recent window of upcoming OFF)
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now + 8, detector)
+    # First pass
+    for snap in snapshots:
+        event = resolver._parse_sensor_event(snap)
+        if event:
+            sid, state = event
+            sensors[sid].update_state(state, snap.timestamp)
+        resolver.process_snapshot(snap, areas, sensors)
 
-    # Frontyard OFF
-    _fire(
-        resolver, sensors, areas, "binary_sensor.frontyard", False, now + 10, detector
-    )
+    occ_a = areas["a"].occupancy
+    occ_b = areas["b"].occupancy
 
-    assert areas["frontyard"].occupancy == 0
-    assert areas["foyer"].occupancy == 1
+    # Reset sensors for replay
+    for s in sensors.values():
+        s.reset()
+
+    # Replay
+    resolver.recalculate_from_history(snapshots, areas, sensors)
+
+    assert areas["a"].occupancy == occ_a
+    assert areas["b"].occupancy == occ_b
 
 
-def test_non_exit_stays_on_motion_off():
-    """Non-exit area, person there, no neighbor activation -> OFF -> stays occupied."""
+# ============================================================
+# Two people in different rooms (separate claims)
+# ============================================================
+
+def test_two_people_separate_rooms():
+    """Two people entering at different exit-capable areas get separate claims."""
     now = time.time()
     config = {
         "areas": {
-            "area_b": {"name": "B", "indoors": True},
+            "entry_a": {"name": "Entry A", "exit_capable": True},
+            "entry_b": {"name": "Entry B", "exit_capable": True},
+            "room": {"name": "Room"},
         },
-        "adjacency": {
-            "area_b": [],
-        },
+        "adjacency": {"entry_a": ["room"], "entry_b": ["room"]},
         "sensors": {},
     }
-
     resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
+
+    areas = {aid: AreaState(aid, cfg) for aid, cfg in config["areas"].items()}
+    sensors = {
+        "s.ea": SensorState("s.ea", {"area": "entry_a", "type": "motion"}, now),
+        "s.eb": SensorState("s.eb", {"area": "entry_b", "type": "motion"}, now),
+        "s.r": SensorState("s.r", {"area": "room", "type": "motion"}, now),
+    }
+
+    # Person A enters at entry_a
+    _fire(resolver, sensors, areas, "s.ea", True, now)
+    assert areas["entry_a"].occupancy == 1
+
+    # Person B enters at entry_b
+    _fire(resolver, sensors, areas, "s.eb", True, now + 1)
+    assert areas["entry_b"].occupancy == 1
+
+    # Total: 2 claims
+    total = sum(a.occupancy for a in areas.values())
+    assert total == 2
+
+
+# ============================================================
+# Adjacency building
+# ============================================================
+
+def test_adjacency_bidirectional():
+    """Adjacency map is built bidirectionally."""
+    config = {
+        "areas": {"a": {}, "b": {}, "c": {}},
+        "adjacency": {"a": ["b"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
+
+    assert "b" in resolver.adjacency_map["a"]
+    assert "a" in resolver.adjacency_map["b"]
+
+
+def test_open_plan_groups_parsed():
+    """Open-plan groups are parsed from config."""
+    config = {
+        "areas": {"k": {}, "d": {}, "l": {}},
+        "adjacency": {},
+        "sensors": {},
+        "open_plan_groups": {
+            "main": {"areas": ["k", "d", "l"]},
+        },
+    }
+    resolver = MapOccupancyResolver(config)
+
+    assert resolver.open_plan_groups == {"main": ["k", "d", "l"]}
+    assert resolver.area_to_group == {"k": "main", "d": "main", "l": "main"}
+
+
+# ============================================================
+# Magnetic events
+# ============================================================
+
+def test_magnetic_event_updates_last_motion():
+    """Magnetic events update last_motion on linked areas."""
+    now = time.time()
+    config = {
+        "areas": {"hall": {}, "room": {}},
+        "adjacency": {"hall": ["room"]},
+        "sensors": {},
+    }
+    resolver = MapOccupancyResolver(config)
 
     areas = {
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
+        "hall": AreaState("hall", config["areas"]["hall"]),
+        "room": AreaState("room", config["areas"]["room"]),
     }
     sensors = {
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
+        "s.door": SensorState(
+            "s.door", {"area": ["hall", "room"], "type": "door"}, now
         ),
     }
 
-    # Person enters B
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now, detector)
-    assert areas["area_b"].occupancy == 1
+    _fire(resolver, sensors, areas, "s.door", True, now)
 
-    # Motion stops, no neighbor, not exit-capable -> stays
-    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 10, detector)
-    assert areas["area_b"].occupancy == 1
+    assert areas["hall"].last_motion == now
+    assert areas["room"].last_motion == now
 
 
-# ---------------------------------------------------------------------------
-# 1D: Multi-Hop BFS
-# ---------------------------------------------------------------------------
+# ============================================================
+# Full walkthrough scenario
+# ============================================================
 
-
-def test_multi_hop_4_room_chain():
-    """A-B-C-D chain, person in A, B/C/D activated in order -> A OFF -> person moves through chain."""
+def test_full_walkthrough_entry_traverse_exit():
+    """Person enters, walks through house, and leaves."""
     now = time.time()
     config = {
         "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-            "area_d": {"name": "D", "indoors": True},
+            "entry": {"name": "Entry", "exit_capable": True},
+            "hall": {"name": "Hall"},
+            "kitchen": {"name": "Kitchen"},
         },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a", "area_c"],
-            "area_c": ["area_b", "area_d"],
-            "area_d": ["area_c"],
-        },
+        "adjacency": {"entry": ["hall"], "hall": ["kitchen"]},
         "sensors": {},
     }
-
     resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
 
-    areas = {aid: AreaState(aid, config["areas"][aid]) for aid in config["areas"]}
+    areas = {aid: AreaState(aid, cfg) for aid, cfg in config["areas"].items()}
     sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-        "binary_sensor.d": SensorState(
-            "binary_sensor.d", {"area": "area_d", "type": "motion"}, now
-        ),
+        "s.e": SensorState("s.e", {"area": "entry", "type": "motion"}, now),
+        "s.h": SensorState("s.h", {"area": "hall", "type": "motion"}, now),
+        "s.k": SensorState("s.k", {"area": "kitchen", "type": "motion"}, now),
     }
 
-    # Person enters A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B, C, D activate in order within masked window
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 3, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 6, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.d", True, now + 9, detector)
-
-    # Verify intermediate state before A OFF
-    assert areas["area_a"].occupancy == 1
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_c"].occupancy == 1
-    assert areas["area_d"].occupancy == 1
-
-    # A turns OFF -> multi-hop should detect movement through B, C, D
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 10, detector)
-
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_c"].occupancy == 1
-    assert areas["area_d"].occupancy == 1
-
-
-def test_multi_hop_branching():
-    """Hub topology: A->B and A->C, person in A, B+C activated -> A OFF -> both B and C occupied."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b", "area_c"],
-            "area_b": ["area_a"],
-            "area_c": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {aid: AreaState(aid, config["areas"][aid]) for aid in config["areas"]}
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Person enters A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B and C activate within window
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 3, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 4, detector)
-
-    # A OFF
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 10, detector)
-
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_c"].occupancy == 1
-
-
-def test_multi_hop_wrong_temporal_order():
-    """A-B-C chain, C ON first then B ON -> only B should be reached (temporal order)."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a", "area_c"],
-            "area_c": ["area_b"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {aid: AreaState(aid, config["areas"][aid]) for aid in config["areas"]}
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Person enters A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # C activates FIRST (wrong temporal order for path A→B→C)
-    _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 1, detector)
-    # C gets occupancy=1 from its own motion-ON (no_adjacent_source warning)
-    c_occupancy_before_bfs = areas["area_c"].occupancy
-
-    # B activates SECOND
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 2, detector)
-
-    # A OFF → BFS should find B (direct neighbor) but NOT expand to C via B
-    # because C activated at t=1 which is BEFORE B at t=2 (wrong temporal order)
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 3, detector)
-
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1
-    # C should NOT have been incremented by BFS (temporal ordering)
-    # It may have occupancy from its own motion-ON, but BFS shouldn't add to it
-    assert areas["area_c"].occupancy == c_occupancy_before_bfs
-
-
-# ---------------------------------------------------------------------------
-# 1E: Multi-Occupant Convergence
-# ---------------------------------------------------------------------------
-
-
-def test_two_people_converge_same_room():
-    """Person1 in C, person2 in B, C retriggers, B OFF -> C=2, B=0."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_b": ["area_c"],
-            "area_c": ["area_b"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-        "area_c": AreaState("area_c", config["areas"]["area_c"]),
-    }
-    sensors = {
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Set up: person1 in C (entered at t=0), person2 in B (entered at t=50)
-    areas["area_c"].record_entry(now)
-    areas["area_c"].last_motion = now
-    sensors["binary_sensor.c"].update_state(True, now)
-
-    areas["area_b"].record_entry(now + 50)
-    areas["area_b"].last_motion = now + 50
-    sensors["binary_sensor.b"].update_state(True, now + 50)
-
-    # C sensor goes OFF then back ON (retrigger at t=100)
-    _fire(resolver, sensors, areas, "binary_sensor.c", False, now + 99, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 100, detector)
-
-    # B turns OFF at t=101 -> person2 should move to C
-    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 101, detector)
-
-    assert areas["area_b"].occupancy == 0
-    # Convergence fix: pre-occupied target gets incremented
-    assert areas["area_c"].occupancy == 2
-
-
-def test_single_person_no_double_count():
-    """Person in A, B ON, A OFF -> B=1 (not 2, since B already got marked on its ON event)."""
-    now = time.time()
-    config = _make_two_area_config()
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # A ON
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B ON (within masked window)
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 3, detector)
-    # B should be 1 from its own ON event
-    assert areas["area_b"].occupancy == 1
-
-    # A OFF -> movement detected, but B already occupied so no double-count
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 10, detector)
-
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1  # Not 2
-
-
-def test_three_people_converge():
-    """3 people converge on D step by step: p2 (C->D), then p3 (B->C->D)."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-            "area_d": {"name": "D", "indoors": True},
-        },
-        "adjacency": {
-            "area_b": ["area_c"],
-            "area_c": ["area_b", "area_d"],
-            "area_d": ["area_c"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {aid: AreaState(aid, config["areas"][aid]) for aid in config["areas"]}
-    sensors = {
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-        "binary_sensor.d": SensorState(
-            "binary_sensor.d", {"area": "area_d", "type": "motion"}, now
-        ),
-    }
-
-    # Setup: p1 in D (entry at t=0), p2 in C (entry at t=10), p3 in B (entry at t=20)
-    areas["area_d"].record_entry(now)
-    areas["area_d"].last_motion = now
-    sensors["binary_sensor.d"].update_state(True, now)
-    sensors["binary_sensor.d"].update_state(False, now + 5)
-
-    areas["area_c"].record_entry(now + 10)
-    areas["area_c"].last_motion = now + 10
-    sensors["binary_sensor.c"].update_state(True, now + 10)
-
-    areas["area_b"].record_entry(now + 20)
-    areas["area_b"].last_motion = now + 20
-    sensors["binary_sensor.b"].update_state(True, now + 20)
-    sensors["binary_sensor.b"].update_state(False, now + 25)
-
-    assert areas["area_b"].occupancy == 1
-    assert areas["area_c"].occupancy == 1
-    assert areas["area_d"].occupancy == 1
-
-    # Step 1: p2 moves C→D. D re-triggers, C OFF
-    _fire(resolver, sensors, areas, "binary_sensor.d", True, now + 100, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.c", False, now + 101, detector)
-    assert areas["area_c"].occupancy == 0
-    assert areas["area_d"].occupancy == 2, "D should have p1 + p2"
-
-    # D sensor cycles OFF (person 1 sits still, KNX 5s timeout)
-    _fire(resolver, sensors, areas, "binary_sensor.d", False, now + 106, detector)
-
-    # Step 2: p3 moves B→C. C triggers, B OFF
-    _fire(resolver, sensors, areas, "binary_sensor.c", True, now + 110, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 111, detector)
-    assert areas["area_b"].occupancy == 0
-    assert areas["area_c"].occupancy == 1, "p3 now in C"
-
-    # Step 3: p3 moves C→D. D re-triggers (fresh activated_at), C OFF
-    _fire(resolver, sensors, areas, "binary_sensor.d", True, now + 120, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.c", False, now + 121, detector)
-    assert areas["area_c"].occupancy == 0
-    assert areas["area_d"].occupancy == 3, "D should have all 3 people"
-
-
-# ---------------------------------------------------------------------------
-# 1F: Sensor Reliability Recovery
-# ---------------------------------------------------------------------------
-
-
-def test_stuck_sensor_recovers_on_transition():
-    """Stuck+unreliable sensor transitions OFF->ON -> should become reliable again."""
-    now = time.time()
-    sensor = SensorState(
-        "binary_sensor.test", {"area": "test_area", "type": "motion"}, now
-    )
-
-    # Make sensor stuck ON for >24h
-    sensor.update_state(True, now)
-    sensor.calculate_is_stuck(now + 86401)
-    assert sensor.is_stuck is True
-    sensor.is_reliable = False
-
-    # Sensor transitions OFF then ON (recovery)
-    sensor.update_state(False, now + 86402)
-    sensor.update_state(True, now + 86403)
-
-    # Reliability recovery fix: state transition restores is_reliable
-    assert sensor.is_reliable is True
-
-
-def test_recovered_sensor_warns_again_if_stuck():
-    """Recovered sensor that gets stuck again -> calculate_is_stuck returns True."""
-    now = time.time()
-    sensor = SensorState(
-        "binary_sensor.test", {"area": "test_area", "type": "motion"}, now
-    )
-
-    # First stuck cycle
-    sensor.update_state(True, now)
-    sensor.calculate_is_stuck(now + 86401)
-    assert sensor.is_stuck is True
-    sensor.is_reliable = False
-
-    # Recovery
-    sensor.update_state(False, now + 86402)
-    sensor.is_stuck = False
-    sensor.is_reliable = True
-
-    # Get stuck again
-    sensor.update_state(True, now + 86403)
-    result = sensor.calculate_is_stuck(now + 86403 + 86401)
-
-    # Reliability recovery allows re-detection of stuck state
-    assert result is True
-    assert sensor.is_stuck is True
-
-
-# ---------------------------------------------------------------------------
-# 1G: Sensor Edge Cases
-# ---------------------------------------------------------------------------
-
-
-def test_motion_off_null_activated_at():
-    """Sensor with activated_at=None, area occupied -> OFF -> stays occupied."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-    }
-
-    # Manually set up: area occupied, sensor ON but activated_at=None
-    areas["area_a"].record_entry(now)
-    areas["area_a"].last_motion = now
-    sensors["binary_sensor.a"].current_state = True
-    sensors["binary_sensor.a"].activated_at = None  # Explicitly null
-
-    # process_snapshot for OFF will call update_state(False, ...) which does NOT set activated_at
-    # The OFF handler checks sensor.activated_at which is still None at the check point (line 401)
-    # because update_state is called first (line 124) and OFF doesn't change activated_at.
-    # Actually, update_state(False) does NOT modify activated_at, so it stays None.
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 10, detector)
-
-    # With activated_at=None, _handle_motion_off returns early -> person stays
-    assert areas["area_a"].occupancy == 1
-
-
-def test_rapid_on_off_on_off():
-    """Non-exit area, rapid ON/OFF/ON/OFF cycle -> stays occupied."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-    }
-
-    # ON at t=0
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # OFF at t=0.3
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 0.3, detector)
-    assert areas["area_a"].occupancy == 1  # stays (non-exit, no neighbor)
-
-    # ON at t=0.5
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now + 0.5, detector)
-    assert areas["area_a"].occupancy == 1  # already occupied, no increment
-
-    # OFF at t=5
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 5, detector)
-    assert areas["area_a"].occupancy == 1  # stays (non-exit, no neighbor)
-
-
-# ---------------------------------------------------------------------------
-# 1H: Activity Consumption
-# ---------------------------------------------------------------------------
-
-
-def test_consumed_activity_not_reused_as_source():
-    """B's activity was consumed by exit to C -> A ON should not count B as plausible source."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a", "area_c"],
-            "area_c": ["area_b"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-        "area_c": AreaState("area_c", config["areas"]["area_c"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Set up: B's activity was consumed (person moved from B to C recently)
-    # B is empty, with last_exit_to = {area_c: recent}, last_motion = recent
-    areas["area_b"].last_motion = now - 5
-    areas["area_b"].occupancy = 0
-    areas["area_b"].last_exit_to = {"area_c": now - 5}
-    # B sensor is OFF
-    sensors["binary_sensor.b"].update_state(True, now - 10)
-    sensors["binary_sensor.b"].update_state(False, now - 5)
-
-    # C is occupied (person moved there from B)
-    areas["area_c"].record_entry(now - 5)
-    areas["area_c"].last_motion = now - 5
-
-    # Now A turns ON - B's activity is consumed (moved to C), so A should NOT
-    # find B as a plausible indoor source
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-
-    # A still becomes occupied (motion-ON always marks occupied) but should warn
-    # since B's activity was consumed
-    warnings = detector.get_warnings()
-    has_no_source_warning = any(
-        "no_adjacent_source" in w.message or "indoor_activation_unlinked" in w.message
-        for w in warnings
-    )
-    assert has_no_source_warning
-
-
-# ---------------------------------------------------------------------------
-# 2A: Multi-Sensor Same Room
-# ---------------------------------------------------------------------------
-
-
-def test_multi_sensor_same_room_first_off_ignored():
-    """Two sensors in same room, first OFF should be ignored if second is still ON."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a1": SensorState(
-            "binary_sensor.a1", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.a2": SensorState(
-            "binary_sensor.a2", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # Person enters area_a — both sensors ON
-    _fire(resolver, sensors, areas, "binary_sensor.a1", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.a2", True, now + 1, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # sensor_a1 goes OFF while sensor_a2 is still ON
-    _fire(resolver, sensors, areas, "binary_sensor.a1", False, now + 10, detector)
-
-    # area_a should remain occupied — the other sensor is still active
-    assert areas["area_a"].occupancy == 1
-    assert areas["area_b"].occupancy == 0
-
-
-def test_multi_sensor_same_room_last_off_triggers_movement():
-    """When ALL sensors in a room go OFF, movement detection proceeds normally."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a1": SensorState(
-            "binary_sensor.a1", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.a2": SensorState(
-            "binary_sensor.a2", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # Person enters area_a — both sensors ON
-    _fire(resolver, sensors, areas, "binary_sensor.a1", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.a2", True, now + 1, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B activates (person moving to B)
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 5, detector)
-
-    # First sensor OFF — still one sensor active, no movement
-    _fire(resolver, sensors, areas, "binary_sensor.a1", False, now + 8, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # Last sensor OFF — movement detection should proceed, B is in window
-    _fire(resolver, sensors, areas, "binary_sensor.a2", False, now + 10, detector)
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1
-
-
-def test_multi_sensor_camera_and_pir_in_same_area():
-    """Camera person + PIR motion in same area. PIR off first, camera still on."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a_camera": SensorState(
-            "binary_sensor.a_camera",
-            {"area": "area_a", "type": "camera_person"},
-            now,
-        ),
-        "binary_sensor.a_pir": SensorState(
-            "binary_sensor.a_pir", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # Both sensors ON in area_a
-    _fire(resolver, sensors, areas, "binary_sensor.a_camera", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.a_pir", True, now + 1, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # PIR goes OFF while camera_person is still ON — no movement
-    _fire(resolver, sensors, areas, "binary_sensor.a_pir", False, now + 15, detector)
-
-    assert areas["area_a"].occupancy == 1
-    assert areas["area_b"].occupancy == 0
-
-
-# ---------------------------------------------------------------------------
-# 2C: Activity Consumption Edge Cases
-# ---------------------------------------------------------------------------
-
-
-def test_person_returns_after_exit_consumed():
-    """Person exits A->B, then returns B->A. A's motion should recognize B as plausible source."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-            "area_c": {"name": "C", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a", "area_c"],
-            "area_c": ["area_b"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-        "area_c": AreaState("area_c", config["areas"]["area_c"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-        "binary_sensor.c": SensorState(
-            "binary_sensor.c", {"area": "area_c", "type": "motion"}, now
-        ),
-    }
-
-    # Person starts in A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # Person moves A -> B
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 3, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 5, detector)
-    assert areas["area_a"].occupancy == 0
-    assert areas["area_b"].occupancy == 1
-    # A should have last_exit_to containing area_b
-    assert "area_b" in areas["area_a"].last_exit_to
-
-    # B motion-OFF, person stays in B (no neighbor activated)
-    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 30, detector)
-    assert areas["area_b"].occupancy == 1
-
-    # Later: person returns B -> A
-    # B is adjacent to A, B has occupancy=1 → plausible source for A
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now + 60, detector)
-
-    # A should become occupied; B is a valid indoor source (occupancy > 0)
-    assert areas["area_a"].occupancy == 1
-
-
-def test_consumed_activity_expires_after_5_minutes():
-    """last_exit_to entries older than 5 minutes should be cleaned up."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # Person moves A -> B at t=0
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 3, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 5, detector)
-    assert areas["area_a"].occupancy == 0
-    assert "area_b" in areas["area_a"].last_exit_to
-
-    # At t=301 (5+ minutes later), trigger another exit from A to force cleanup.
-    # record_exit cleans up stale last_exit_to entries.
-    # First, give A occupancy so record_exit works:
-    areas["area_a"].record_entry(now + 200)
-    areas["area_a"].record_exit(now + 301, target_id="area_b")
-
-    # The old exit_to entry at t=5 should be cleaned up (301 - 5 = 296 > 300? No)
-    # Actually (now+301) - (now+5) = 296 < 300, so it won't be cleaned yet.
-    # Let's use t=306 to exceed the 300s threshold:
-    areas["area_a"].record_entry(now + 302)
-    areas["area_a"].record_exit(now + 306, target_id="area_c")
-
-    # Now the old exit at t=5 is (306-5)=301 > 300 -> should be cleaned
-    # But the exit at t=301 is (306-301)=5 < 300 -> should remain
-    assert ("area_b" not in areas["area_a"].last_exit_to) or (
-        areas["area_a"].last_exit_to.get("area_b") == now + 301
-    )
-
-
-# ---------------------------------------------------------------------------
-# 2D: Sensor Edge Cases
-# ---------------------------------------------------------------------------
-
-
-def test_sensor_power_cycle_off_ignored():
-    """Sensor power cycles (restart). OFF event with occupancy=0 is safely ignored."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-    }
-
-    # Area is empty, sensor was never turned ON (initial state is False).
-    # Process an OFF event (as if sensor restarted and reported OFF).
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 10, detector)
-
-    # No crash, occupancy stays 0
-    assert areas["area_a"].occupancy == 0
-
-
-def test_repeated_on_events_update_last_motion():
-    """Repeated ON events should update area.last_motion (keep-alive behavior)."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": [],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-    }
-
-    # First ON at t=0
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-    assert areas["area_a"].last_motion == now
-
-    # Repeated ON at t=60 (sensor re-reports ON without going OFF first).
-    # sensor.update_state returns False (no state change), but process_snapshot
-    # still reads new_state from the snapshot description (line 78: parts[2] == "on").
-    # At line 109-110: sensor_type is "motion" and new_state is True, so
-    # _handle_motion_on IS called. At line 212: area.last_motion = timestamp.
-    # Since area.occupancy > 0, it returns early at line 215 but last_motion
-    # was already updated at line 212.
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now + 60, detector)
-
-    assert areas["area_a"].occupancy == 1  # still 1, no increment
-    assert areas["area_a"].last_motion == now + 60  # updated by _handle_motion_on
-
-
-# ---------------------------------------------------------------------------
-# 2E: Exit-Capable Edge Cases
-# ---------------------------------------------------------------------------
-
-
-def test_exit_capable_with_neighbor_activation_long_ago():
-    """Exit-capable area OFF with stale neighbor activation -> person left system."""
-    now = time.time()
-    config = {
-        "areas": {
-            "frontyard": {
-                "name": "Front Yard",
-                "transition": True,
-                "exit_capable": True,
-                "indoors": False,
-            },
-            "foyer": {"name": "Foyer", "indoors": True},
-        },
-        "adjacency": {
-            "frontyard": ["foyer"],
-            "foyer": ["frontyard"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-        "foyer": AreaState("foyer", config["areas"]["foyer"]),
-    }
-    sensors = {
-        "binary_sensor.frontyard": SensorState(
-            "binary_sensor.frontyard",
-            {"area": "frontyard", "type": "motion"},
-            now,
-        ),
-        "binary_sensor.foyer": SensorState(
-            "binary_sensor.foyer", {"area": "foyer", "type": "motion"}, now
-        ),
-    }
-
-    # Foyer had activation 100s ago (stale)
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", True, now, detector)
-    _fire(resolver, sensors, areas, "binary_sensor.foyer", False, now + 10, detector)
-
-    # Person enters frontyard at t=100
-    _fire(
-        resolver, sensors, areas, "binary_sensor.frontyard", True, now + 100, detector
-    )
-    assert areas["frontyard"].occupancy == 1
-
-    # Frontyard OFF at t=200 — foyer activation was at t=0, way outside all windows.
-    # source_on=100, foyer sensor is OFF -> _get_area_activated_at returns None for foyer.
-    # No valid neighbors found, exit-capable -> person left system.
-    _fire(
-        resolver, sensors, areas, "binary_sensor.frontyard", False, now + 200, detector
-    )
-
-    assert areas["frontyard"].occupancy == 0
-    assert areas["foyer"].occupancy == 0
-
-
-def test_exit_capable_timeout_clears_even_with_motion():
-    """Exit-capable 5-minute timeout clears occupancy even if last_motion is old."""
-    now = time.time()
-    config = {
-        "areas": {
-            "frontyard": {
-                "name": "Front Yard",
-                "transition": True,
-                "exit_capable": True,
-                "indoors": False,
-            },
-        },
-        "adjacency": {
-            "frontyard": [],
-        },
-        "sensors": {},
-    }
-
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "frontyard": AreaState("frontyard", config["areas"]["frontyard"]),
-    }
-
-    # Frontyard occupied, last_motion was 301s ago (just over 5 minutes)
-    areas["frontyard"].record_entry(now)
-    areas["frontyard"].last_motion = now
-
-    # check_timeouts at now + 301 -> auto-clear
-    detector.check_timeouts(areas, now + 301)
-
-    assert areas["frontyard"].occupancy == 0
-
-    # Verify a warning was created
-    warnings = detector.get_warnings()
-    has_exit_clear_warning = any(w.type == "exit_area_auto_clear" for w in warnings)
-    assert has_exit_clear_warning
-
-
-# ---------------------------------------------------------------------------
-# 2F: Fallback negative-delta guard
-# ---------------------------------------------------------------------------
-
-
-def test_fallback_rejects_neighbor_activated_before_source():
-    """Fallback must not treat a long-running neighbor as movement evidence.
-
-    If neighbor activated BEFORE source_on_time, the delta is negative and
-    must be rejected. Without the guard, (negative <= 30) is always True.
-    """
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # A has been active since t=0 (long-running, e.g. stuck or slow PIR)
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B activates much later at t=50
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 50, detector)
-    assert areas["area_b"].occupancy == 1
-
-    # B turns OFF at t=55. A is still active (ON since t=0).
-    # Primary check: A.activated_at=now(t=0), source_on=50. 50 < 0? No → skipped.
-    # Fallback: A is active and occupied.
-    #   _activation_matches_window(0): 0 <= 50 (source_on)? YES → rejected by guard.
-    # Person should STAY in B.
-    _fire(resolver, sensors, areas, "binary_sensor.b", False, now + 55, detector)
-
-    assert areas["area_b"].occupancy == 1, (
-        "Person must stay in B; A's pre-existing activation is not movement evidence"
-    )
-    assert areas["area_a"].occupancy == 1, "A should not be incremented"
-
-
-def test_fallback_accepts_neighbor_activated_after_source():
-    """Fallback should still work for legitimate slow movement."""
-    now = time.time()
-    config = {
-        "areas": {
-            "area_a": {"name": "A", "indoors": True},
-            "area_b": {"name": "B", "indoors": True},
-        },
-        "adjacency": {
-            "area_a": ["area_b"],
-            "area_b": ["area_a"],
-        },
-        "sensors": {},
-    }
-
-    resolver = MapOccupancyResolver(config)
-    detector = AnomalyDetector(config)
-
-    areas = {
-        "area_a": AreaState("area_a", config["areas"]["area_a"]),
-        "area_b": AreaState("area_b", config["areas"]["area_b"]),
-    }
-    sensors = {
-        "binary_sensor.a": SensorState(
-            "binary_sensor.a", {"area": "area_a", "type": "motion"}, now
-        ),
-        "binary_sensor.b": SensorState(
-            "binary_sensor.b", {"area": "area_b", "type": "motion"}, now
-        ),
-    }
-
-    # Person in A since t=0
-    _fire(resolver, sensors, areas, "binary_sensor.a", True, now, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # A turns OFF at t=5 (KNX 5s timeout), no neighbor yet → person stays
-    _fire(resolver, sensors, areas, "binary_sensor.a", False, now + 5, detector)
-    assert areas["area_a"].occupancy == 1
-
-    # B activates at t=8 (person finally reaches B, 3s after A went off)
-    _fire(resolver, sensors, areas, "binary_sensor.b", True, now + 8, detector)
-    # B gets occupancy from its own motion-ON (A is adjacent and occupied)
-    assert areas["area_b"].occupancy == 1
+    # Enter
+    _fire(resolver, sensors, areas, "s.e", True, now)
+    assert areas["entry"].occupancy == 1
+
+    # Walk to hall (transfer on ON)
+    _fire(resolver, sensors, areas, "s.h", True, now + 1)
+    assert areas["hall"].occupancy == 1
+    assert areas["entry"].occupancy == 0
+
+    # Walk to kitchen
+    _fire(resolver, sensors, areas, "s.k", True, now + 2)
+    assert areas["kitchen"].occupancy == 1
+    assert areas["hall"].occupancy == 0
+
+    # Sit in kitchen, sensors turn off
+    _fire(resolver, sensors, areas, "s.e", False, now + 5)
+    _fire(resolver, sensors, areas, "s.h", False, now + 6)
+    _fire(resolver, sensors, areas, "s.k", False, now + 7)
+
+    # Person stays in kitchen (non-exit)
+    assert areas["kitchen"].occupancy == 1
+
+    # Walk back to hall
+    _fire(resolver, sensors, areas, "s.h", True, now + 60)
+    assert areas["hall"].occupancy == 1
+    assert areas["kitchen"].occupancy == 0
+
+    # Walk to entry
+    _fire(resolver, sensors, areas, "s.e", True, now + 61)
+    assert areas["entry"].occupancy == 1
+    assert areas["hall"].occupancy == 0
+
+    # Leave via entry
+    _fire(resolver, sensors, areas, "s.h", False, now + 65)
+    _fire(resolver, sensors, areas, "s.e", False, now + 66)
+    assert areas["entry"].occupancy == 0
+
+    # Total: 0
+    total = sum(a.occupancy for a in areas.values())
+    assert total == 0

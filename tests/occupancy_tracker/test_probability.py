@@ -4,6 +4,13 @@ from homeassistant.core import HomeAssistant
 from custom_components.occupancy_tracker.coordinator import OccupancyCoordinator
 
 
+def _set_occupancy(area, count):
+    """Set area occupancy by adding test claims."""
+    area.claims.clear()
+    for i in range(count):
+        area.claims.add(f"_test_{i}")
+
+
 @pytest.fixture
 def coordinator():
     hass = Mock(spec=HomeAssistant)

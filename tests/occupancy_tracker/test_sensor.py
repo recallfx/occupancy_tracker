@@ -1,21 +1,29 @@
-"""Tests for sensor platform."""
+"""Tests for sensor and binary_sensor platforms."""
+
+import time
 
 import pytest
 from unittest.mock import MagicMock, Mock
 
 from homeassistant.core import HomeAssistant
-from custom_components.occupancy_tracker.sensor import (
-    OccupancyCountSensor,
-    OccupancyProbabilitySensor,
+from custom_components.occupancy_tracker.sensors import (
     AnomalySensor,
-    OccupiedInsideAreasSensor,
-    OccupiedOutsideAreasSensor,
-    TotalOccupantsInsideSensor,
-    TotalOccupantsOutsideSensor,
-    TotalOccupantsSensor,
-    async_setup_platform,
+    AreaOccupancyBinarySensor,
+)
+from custom_components.occupancy_tracker.sensor import (
+    async_setup_platform as async_setup_sensor_platform,
+)
+from custom_components.occupancy_tracker.binary_sensor import (
+    async_setup_platform as async_setup_binary_sensor_platform,
 )
 from custom_components.occupancy_tracker.coordinator import OccupancyCoordinator
+
+
+def _set_occupancy(area, count):
+    """Set area occupancy by adding test claims."""
+    area.claims.clear()
+    for i in range(count):
+        area.claims.add(f"_test_{i}")
 
 
 @pytest.fixture
@@ -34,53 +42,71 @@ def coordinator():
     return OccupancyCoordinator(hass, config)
 
 
-class TestOccupancyCountSensor:
-    """Test OccupancyCountSensor class."""
+class TestAreaOccupancyBinarySensor:
+    """Test AreaOccupancyBinarySensor class."""
 
     def test_create_sensor(self, coordinator):
-        """Test creating an occupancy count sensor."""
-        sensor = OccupancyCountSensor(coordinator, "living_room")
+        """Test creating a binary occupancy sensor."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
 
         assert sensor._area == "living_room"
-        assert sensor._attr_name == "Occupancy Count living_room"
-        assert sensor._attr_unique_id == "occupancy_count_living_room"
+        assert sensor._attr_name == "Living Room Occupancy"
+        assert sensor._attr_unique_id == "occupancy_living_room"
 
-    def test_sensor_state_zero(self, coordinator):
-        """Test sensor state when occupancy is zero."""
-        sensor = OccupancyCountSensor(coordinator, "bedroom")
+    def test_is_on_when_occupied(self, coordinator):
+        """Test sensor is ON when area is occupied."""
+        _set_occupancy(coordinator.areas["living_room"], 1)
 
-        assert sensor.state == 0
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
 
-    def test_sensor_state_occupied(self, coordinator):
-        """Test sensor state when area is occupied."""
-        coordinator.areas["living_room"].occupancy = 3
+        assert sensor.is_on is True
 
-        sensor = OccupancyCountSensor(coordinator, "living_room")
+    def test_is_off_when_empty(self, coordinator):
+        """Test sensor is OFF when area is empty."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "bedroom")
 
-        assert sensor.state == 3
+        assert sensor.is_on is False
 
+    def test_attributes_include_count(self, coordinator):
+        """Test attributes include occupancy count."""
+        _set_occupancy(coordinator.areas["living_room"], 1)
 
-class TestOccupancyProbabilitySensor:
-    """Test OccupancyProbabilitySensor class."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
+        attrs = sensor.extra_state_attributes
 
-    def test_create_sensor(self, coordinator):
-        """Test creating an occupancy probability sensor."""
-        sensor = OccupancyProbabilitySensor(coordinator, "bedroom")
+        assert attrs["occupancy_count"] == 1
 
-        assert sensor._area == "bedroom"
-        assert sensor._attr_name == "Occupancy Probability bedroom"
-        assert sensor._attr_unique_id == "occupancy_probability_bedroom"
-
-    def test_sensor_state(self, coordinator):
-        """Test sensor state reflects probability."""
-        import time
-
-        coordinator.areas["living_room"].occupancy = 1
+    def test_attributes_include_probability(self, coordinator):
+        """Test attributes include probability."""
+        _set_occupancy(coordinator.areas["living_room"], 1)
         coordinator.areas["living_room"].record_motion(time.time())
 
-        sensor = OccupancyProbabilitySensor(coordinator, "living_room")
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
+        attrs = sensor.extra_state_attributes
 
-        assert sensor.state == 1.0
+        assert attrs["probability"] == 1.0
+
+    def test_attributes_include_area_properties(self, coordinator):
+        """Test attributes include indoors and exit_capable."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["is_indoors"] is True
+        assert attrs["is_exit_capable"] is False
+
+    def test_attributes_time_since_motion(self, coordinator):
+        """Test time_since_motion is None when no motion recorded."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "bedroom")
+        attrs = sensor.extra_state_attributes
+
+        assert attrs["last_motion"] is None
+        assert attrs["time_since_motion_s"] is None
+
+    def test_device_class(self, coordinator):
+        """Test device class is occupancy."""
+        sensor = AreaOccupancyBinarySensor(coordinator, "living_room")
+
+        assert sensor.device_class == "occupancy"
 
 
 class TestAnomalySensor:
@@ -102,7 +128,6 @@ class TestAnomalySensor:
 
     def test_sensor_state_with_anomalies(self, coordinator):
         """Test sensor state with active anomalies."""
-        # Create some warnings
         coordinator.anomaly_detector._create_warning("stuck_sensor", "Sensor stuck")
         coordinator.anomaly_detector._create_warning("unexpected_motion", "Unexpected")
 
@@ -123,8 +148,6 @@ class TestAnomalySensor:
 
     def test_extra_state_attributes(self, coordinator):
         """Test extra state attributes."""
-        import time
-
         coordinator.anomaly_detector._create_warning(
             "stuck_sensor",
             "Sensor stuck",
@@ -154,23 +177,6 @@ class TestAnomalySensor:
         assert attrs["anomaly_counts"]["stuck_sensor"] == 2
         assert attrs["anomaly_counts"]["unexpected_motion"] == 1
 
-    def test_extra_state_attributes_latest(self, coordinator):
-        """Test latest anomaly in attributes."""
-        import time
-
-        coordinator.anomaly_detector._create_warning(
-            "type1", "First", timestamp=time.time()
-        )
-        time.sleep(0.01)
-        coordinator.anomaly_detector._create_warning(
-            "type2", "Second", timestamp=time.time()
-        )
-
-        sensor = AnomalySensor(coordinator)
-        attrs = sensor.extra_state_attributes
-
-        assert attrs["latest_anomaly"]["type"] == "type2"
-
     def test_sensor_available(self, coordinator):
         """Test sensor is always available."""
         sensor = AnomalySensor(coordinator)
@@ -184,113 +190,13 @@ class TestAnomalySensor:
         assert sensor.device_class == "problem"
 
 
-class TestOccupiedInsideAreasSensor:
-    """Test OccupiedInsideAreasSensor class."""
+class TestAsyncSetupPlatforms:
+    """Test platform setup functions."""
 
-    def test_create_sensor(self, coordinator):
-        """Test creating sensor."""
-        sensor = OccupiedInsideAreasSensor(coordinator)
-
-        assert sensor._attr_name == "Occupied Inside Areas"
-        assert sensor._attr_unique_id == "occupied_inside_areas"
-
-    def test_sensor_state(self, coordinator):
-        """Test sensor state shows count of occupied indoor areas."""
-        coordinator.areas["living_room"].occupancy = 1
-        coordinator.areas["bedroom"].occupancy = 2
-        # porch is outdoor
-
-        sensor = OccupiedInsideAreasSensor(coordinator)
-
-        assert sensor.state == 2
-
-    def test_sensor_attributes(self, coordinator):
-        """Test sensor attributes list occupied areas."""
-        coordinator.areas["living_room"].occupancy = 1
-        coordinator.areas["bedroom"].occupancy = 1
-
-        sensor = OccupiedInsideAreasSensor(coordinator)
-        attrs = sensor.extra_state_attributes
-
-        assert "areas" in attrs
-        assert len(attrs["areas"]) == 2
-        assert "living_room" in attrs["areas"]
-        assert "bedroom" in attrs["areas"]
-        assert "porch" not in attrs["areas"]  # outdoor
-
-
-class TestOccupiedOutsideAreasSensor:
-    """Test OccupiedOutsideAreasSensor class."""
-
-    def test_create_sensor(self, coordinator):
-        """Test creating sensor."""
-        sensor = OccupiedOutsideAreasSensor(coordinator)
-
-        assert sensor._attr_name == "Occupied Outside Areas"
-        assert sensor._attr_unique_id == "occupied_outside_areas"
-
-    def test_sensor_state(self, coordinator):
-        """Test sensor state shows count of occupied outdoor areas."""
-        coordinator.areas["porch"].occupancy = 1
-
-        sensor = OccupiedOutsideAreasSensor(coordinator)
-
-        assert sensor.state == 1
-
-    def test_sensor_attributes(self, coordinator):
-        """Test sensor attributes list occupied outdoor areas."""
-        coordinator.areas["porch"].occupancy = 2
-
-        sensor = OccupiedOutsideAreasSensor(coordinator)
-        attrs = sensor.extra_state_attributes
-
-        assert "areas" in attrs
-        assert "porch" in attrs["areas"]
-        assert "living_room" not in attrs["areas"]  # indoor
-
-
-class TestTotalOccupantsSensors:
-    """Test total occupant sensors."""
-
-    def test_total_occupants_inside(self, coordinator):
-        """Test total occupants inside sensor."""
-        coordinator.areas["living_room"].occupancy = 2
-        coordinator.areas["bedroom"].occupancy = 1
-
-        sensor = TotalOccupantsInsideSensor(coordinator)
-
-        assert sensor._attr_name == "Total Occupants Inside"
-        assert sensor.state == 3
-
-    def test_total_occupants_outside(self, coordinator):
-        """Test total occupants outside sensor."""
-        coordinator.areas["porch"].occupancy = 2
-
-        sensor = TotalOccupantsOutsideSensor(coordinator)
-
-        assert sensor._attr_name == "Total Occupants Outside"
-        assert sensor.state == 2
-
-    def test_total_occupants(self, coordinator):
-        """Test total occupants sensor."""
-        coordinator.areas["living_room"].occupancy = 2
-        coordinator.areas["bedroom"].occupancy = 1
-        coordinator.areas["porch"].occupancy = 1
-
-        sensor = TotalOccupantsSensor(coordinator)
-
-        assert sensor._attr_name == "Total Occupants"
-        assert sensor.state == 4
-
-
-class TestAsyncSetupPlatform:
-    """Test async_setup_platform function."""
-
-    async def test_setup_platform(self, hass):
-        """Test setting up the sensor platform."""
+    async def test_binary_sensor_platform(self, hass):
+        """Test binary sensor platform creates one entity per area."""
         from custom_components.occupancy_tracker.const import DOMAIN
 
-        # Create coordinator and add to hass.data
         config = {
             "areas": {
                 "living_room": {"name": "Living Room"},
@@ -300,25 +206,20 @@ class TestAsyncSetupPlatform:
             "sensors": {},
         }
         coordinator = OccupancyCoordinator(hass, config)
-
         hass.data[DOMAIN] = {"coordinator": coordinator}
 
-        # Mock async_add_entities
         async_add_entities = MagicMock()
+        await async_setup_binary_sensor_platform(hass, config, async_add_entities)
 
-        # Call setup
-        await async_setup_platform(hass, config, async_add_entities)
-
-        # Should create sensors
         assert async_add_entities.called
-        sensors = async_add_entities.call_args[0][0]
+        entities = async_add_entities.call_args[0][0]
 
-        # Should have sensors for both areas plus global sensors
-        # 2 areas * 2 sensors + 6 global sensors = 10 total
-        assert len(sensors) >= 10
+        # One binary sensor per area
+        assert len(entities) == 2
+        assert all(isinstance(e, AreaOccupancyBinarySensor) for e in entities)
 
-    async def test_setup_platform_creates_all_sensor_types(self, hass):
-        """Test that all sensor types are created."""
+    async def test_sensor_platform(self, hass):
+        """Test sensor platform creates only anomaly sensor."""
         from custom_components.occupancy_tracker.const import DOMAIN
 
         config = {
@@ -327,20 +228,12 @@ class TestAsyncSetupPlatform:
             "sensors": {},
         }
         coordinator = OccupancyCoordinator(hass, config)
-
         hass.data[DOMAIN] = {"coordinator": coordinator}
 
         async_add_entities = MagicMock()
+        await async_setup_sensor_platform(hass, config, async_add_entities)
 
-        await async_setup_platform(hass, config, async_add_entities)
+        entities = async_add_entities.call_args[0][0]
 
-        sensors = async_add_entities.call_args[0][0]
-
-        # Check that different sensor types are present
-        sensor_types = {type(s).__name__ for s in sensors}
-
-        assert "OccupancyCountSensor" in sensor_types
-        assert "OccupancyProbabilitySensor" in sensor_types
-        assert "AnomalySensor" in sensor_types
-        assert "OccupiedInsideAreasSensor" in sensor_types
-        assert "TotalOccupantsSensor" in sensor_types
+        assert len(entities) == 1
+        assert isinstance(entities[0], AnomalySensor)

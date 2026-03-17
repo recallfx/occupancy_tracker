@@ -17,7 +17,7 @@ class TestSensorState:
         assert sensor.id == "sensor.motion_1"
         assert sensor.config == config
         assert sensor.current_state is False
-        assert sensor.last_changed == timestamp
+        assert sensor.last_changed == 0  # Only set by real state changes
         assert sensor.history == []
         assert sensor.is_reliable is True
         assert sensor.is_stuck is False
@@ -45,7 +45,7 @@ class TestSensorState:
 
         assert result is False
         assert sensor.current_state is False
-        assert sensor.last_changed == timestamp  # Unchanged
+        assert sensor.last_changed == 0  # Never changed from init
 
     def test_state_transitions(self):
         """Test multiple state transitions."""

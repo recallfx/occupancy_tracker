@@ -3,6 +3,13 @@ from custom_components.occupancy_tracker.helpers.anomaly_detector import Anomaly
 from custom_components.occupancy_tracker.helpers.area_state import AreaState
 
 
+def _set_occupancy(area: AreaState, count: int) -> None:
+    """Set area occupancy by adding test claims."""
+    area.claims.clear()
+    for i in range(count):
+        area.claims.add(f"_test_{i}")
+
+
 @pytest.fixture
 def config_with_exit_area():
     return {

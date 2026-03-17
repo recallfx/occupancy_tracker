@@ -59,7 +59,7 @@ def test_history_verifier_identical_states(config):
         "room_a": AreaState("room_a", {"name": "Room A"}),
         "room_b": AreaState("room_b", {"name": "Room B"}),
     }
-    replayed_areas["room_a"].occupancy = 1
+    replayed_areas["room_a"].claims.add("_test_0")
     replayed_areas["room_a"].last_motion = 100.0
 
     replayed_sensors = {
@@ -102,7 +102,7 @@ def test_history_verifier_detects_occupancy_mismatch(config):
     replayed_areas = {
         "room_a": AreaState("room_a", {"name": "Room A"}),
     }
-    replayed_areas["room_a"].occupancy = 2  # Different!
+    # In the clustering model, occupancy is binary; set to 0 so it differs from recorded=1
     replayed_areas["room_a"].last_motion = 100.0
 
     replayed_sensors = {
@@ -122,7 +122,7 @@ def test_history_verifier_detects_occupancy_mismatch(config):
     assert differences[0].description == "Occupancy mismatch"
     assert differences[0].area_id == "room_a"
     assert differences[0].recorded_value == 1
-    assert differences[0].replayed_value == 2
+    assert differences[0].replayed_value == 0
 
 
 def test_history_verifier_detects_sensor_mismatch(config):

@@ -166,3 +166,8 @@ test_output/
 debug/
 *.local
 
+
+# Private test data (real house config and sensor history)
+tests/fixtures/sensor_history_24h.csv
+tests/integration/test_full_replay.py
+tests/fixtures/sensor_history_7d.csv

@@ -13,6 +13,13 @@ from custom_components.occupancy_tracker.helpers.map_state_recorder import MapSn
 from custom_components.occupancy_tracker.helpers.sensor_state import SensorState
 
 
+def _set_occupancy(area: AreaState, count: int) -> None:
+    """Set area occupancy by adding test claims."""
+    area.claims.clear()
+    for i in range(count):
+        area.claims.add(f"_test_{i}")
+
+
 class TestAnomalyDetector:
     """Test AnomalyDetector class."""
 
@@ -163,7 +170,7 @@ class TestAnomalyDetector:
         }
 
         # Set up occupied area with old motion
-        areas["bedroom"].occupancy = 2
+        _set_occupancy(areas["bedroom"], 2)
         areas["bedroom"].last_motion = timestamp - (25 * 3600)  # 25 hours ago
 
         detector.check_timeouts(areas, timestamp)
@@ -188,7 +195,7 @@ class TestAnomalyDetector:
         }
 
         # Set up occupied area with 13 hours of inactivity
-        areas["office"].occupancy = 1
+        _set_occupancy(areas["office"], 1)
         areas["office"].last_motion = timestamp - (13 * 3600)
 
         detector.check_timeouts(areas, timestamp)
@@ -213,7 +220,7 @@ class TestAnomalyDetector:
         }
 
         # Set up occupied area with 13 hours of inactivity
-        areas["office"].occupancy = 1
+        _set_occupancy(areas["office"], 1)
         areas["office"].last_motion = timestamp - (13 * 3600)
 
         # Check timeouts twice
@@ -255,6 +262,8 @@ class TestAnomalyDetector:
             sensors={},
         )
 
+        # Update sensor state before processing (mirrors coordinator behavior)
+        sensors["binary_sensor.back"].update_state(True, timestamp)
         resolver.process_snapshot(snapshot, areas, sensors, detector)
 
         warnings = detector.get_warnings()
@@ -274,7 +283,7 @@ class TestAnomalyDetector:
         }
 
         # Occupied with recent motion
-        areas["kitchen"].occupancy = 1
+        _set_occupancy(areas["kitchen"], 1)
         areas["kitchen"].record_motion(timestamp - 60)  # 1 minute ago
 
         detector.check_timeouts(areas, timestamp)
@@ -375,7 +384,7 @@ class TestPhantomOccupancyCleanup:
         sensors = self._make_sensors(self.BASE_TIME)
 
         # Bedroom occupied with very old motion
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000  # 200 min ago
 
         # All neighbors quiet
@@ -401,7 +410,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 900  # 15 min ago
 
         detector.check_timeouts(
@@ -417,7 +426,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
 
         areas["hallway"].last_motion = self.BASE_TIME - 3600
@@ -438,7 +447,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
 
         # Someone walked through hallway 2 min ago
@@ -457,7 +466,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
         areas["hallway"].last_motion = self.BASE_TIME - 3600
 
@@ -500,7 +509,7 @@ class TestPhantomOccupancyCleanup:
             ),
         }
 
-        areas["hallway"].occupancy = 1
+        _set_occupancy(areas["hallway"], 1)
         areas["hallway"].last_motion = self.BASE_TIME - 12000
         areas["kitchen"].last_motion = self.BASE_TIME - 3600
 
@@ -520,7 +529,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["frontyard"].occupancy = 1
+        _set_occupancy(areas["frontyard"], 1)
         areas["frontyard"].last_motion = self.BASE_TIME - 12000
 
         # Note: exit-capable auto-clear at 5 min will fire first,
@@ -543,11 +552,11 @@ class TestPhantomOccupancyCleanup:
         sensors = self._make_sensors(self.BASE_TIME)
 
         # Kitchen: legitimately occupied (recent motion)
-        areas["kitchen"].occupancy = 1
+        _set_occupancy(areas["kitchen"], 1)
         areas["kitchen"].last_motion = self.BASE_TIME - 60
 
         # Bedroom: phantom (all conditions met)
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
 
         # Hallway quiet
@@ -571,10 +580,10 @@ class TestPhantomOccupancyCleanup:
         detector = AnomalyDetector(config)
         areas = self._make_areas(config)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
 
-        # Call without new params — should not crash, no phantom cleanup
+        # Call without new params -- should not crash, no phantom cleanup
         detector.check_timeouts(areas, self.BASE_TIME)
 
         # 24h check won't fire (only 200 min), so bedroom stays
@@ -587,7 +596,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 1
+        _set_occupancy(areas["bedroom"], 1)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
         areas["hallway"].last_motion = self.BASE_TIME - 3600
 
@@ -621,7 +630,7 @@ class TestPhantomOccupancyCleanup:
             ),
         }
 
-        areas["isolated"].occupancy = 1
+        _set_occupancy(areas["isolated"], 1)
         areas["isolated"].last_motion = self.BASE_TIME - 12000
 
         detector.check_timeouts(
@@ -637,7 +646,7 @@ class TestPhantomOccupancyCleanup:
         areas = self._make_areas(config)
         sensors = self._make_sensors(self.BASE_TIME)
 
-        areas["bedroom"].occupancy = 3
+        _set_occupancy(areas["bedroom"], 3)
         areas["bedroom"].last_motion = self.BASE_TIME - 12000
         areas["hallway"].last_motion = self.BASE_TIME - 3600
 
